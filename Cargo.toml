@@ -16,7 +16,7 @@ predicates = "1.0.0"
 
 [lib]
 test = false
-doctest = false
+doctest = true
 
 [[bin]]
 name = "kvs"
