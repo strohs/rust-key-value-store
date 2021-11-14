@@ -1,24 +1,34 @@
-use std::process::exit;
+#![deny(missing_docs)]
 
-pub struct KvStore {}
+use std::collections::HashMap;
+
+pub struct KvStore {
+    // in-memory KV store
+    store: HashMap<String, String>,
+}
 
 impl KvStore {
     pub fn new() -> Self {
-        KvStore {}
+        KvStore {
+            store: HashMap::new(),
+        }
     }
 
     pub fn get(&self, key: String) -> Option<String> {
-        eprintln!("unimplemented!");
-        exit(1);
+        self.store.get(&key).cloned()
     }
 
     pub fn set(&mut self, key: String, value: String) {
-        eprintln!("unimplemented!");
-        exit(1);
+        self.store.insert(key, value);
     }
 
     pub fn remove(&mut self, key: String) {
-        eprintln!("unimplemented!");
-        exit(1);
+        self.store.remove(&key);
+    }
+}
+
+impl Default for KvStore {
+    fn default() -> Self {
+        Self::new()
     }
 }
