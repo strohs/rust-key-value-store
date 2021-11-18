@@ -1,3 +1,4 @@
+use std::process::exit;
 use clap::{crate_version, App, Arg, SubCommand};
 use kvs::KvStore;
 
@@ -20,22 +21,47 @@ fn main() {
         ])
         .get_matches();
 
-    let mut kvs = KvStore::new();
+    let mut kvs = match KvStore::open(".") {
+        Err(e) => {
+            eprintln!("{}", e);
+            exit(1);
+        },
+        Ok(k) => k,
+    };
 
     match matches.subcommand() {
         ("set", Some(args)) => {
             let key = args.value_of("KEY").map(String::from).unwrap();
             let value = args.value_of("VALUE").map(String::from).unwrap();
-            kvs.set(key, value);
+            if let Err(e) = kvs.set(key, value) {
+                println!("{}", &e);
+                exit(1);
+            }
         }
         ("get", Some(args)) => {
             let key = args.value_of("KEY").map(String::from).unwrap();
-            kvs.get(key);
+            match kvs.get(key) {
+                Err(e) => {
+                    println!("{}", &e);
+                    exit(1);
+                },
+                Ok(Some(value)) => {
+                    println!("{}", value);
+                    exit(0);
+                },
+                Ok(None) => {
+                    println!("Key not found");
+                    exit(0);
+                }
+            }
         }
         ("rm", Some(args)) => {
             let key = args.value_of("KEY").map(String::from).unwrap();
-            kvs.remove(key);
+            if let Err(e) = kvs.remove(key) {
+                println!("{}", &e);
+                exit(1);
+            }
         }
-        _ => panic!("unkown command reveived"),
+        _ => panic!("unknown command received"),
     }
 }
