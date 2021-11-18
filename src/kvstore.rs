@@ -7,8 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Deserializer;
 
 use crate::error::Result;
-use crate::KvsError;
-use crate::KvsError::IOError;
+use anyhow::{anyhow, Context};
 
 // the default file name for the kvs command log
 static DEFAULT_LOG_FILE_NAME: &str = "kvs.log";
@@ -53,7 +52,8 @@ impl KvStore {
     /// loads the commands from the kvs log file into the (in-memory) index
     pub fn load(&mut self) -> Result<()> {
         self.index.clear();
-        let log_file = File::open(&self.log_path)?;
+        let log_file = File::open(&self.log_path)
+            .context(format!("failed to open command log file at {:?}", &self.log_path))?;
 
         let reader = BufReader::new(log_file);
         let mut stream = Deserializer::from_reader(reader).into_iter::<Command>();
@@ -90,12 +90,13 @@ impl KvStore {
             reader.seek(SeekFrom::Start(*pos))?;
             reader.read_exact(&mut buf)?;
             let command_string = String::from_utf8(buf)
-                .map_err(|_e| IOError(format!("could not convert command at pos {} len {} into a valid UTF8 String", pos, len)))?;
+                .context(format!("could not convert command at pos {} len {} into a valid UTF8 String", pos, len))?;
 
             // deserialize the command string into a command enum and return the value field
-            match serde_json::from_str::<Command>(&command_string)? {
+            match serde_json::from_str::<Command>(&command_string)?
+            {
                 Command::Set { value, .. } => Ok(Some(value)),
-                _ => Err(KvsError::SerializationError),
+                _ => Err(anyhow!("could not de-serialize command string {}", &command_string)),
             }
 
         } else {
@@ -136,7 +137,7 @@ impl KvStore {
 
             Ok(())
         } else {
-            Err(KvsError::KeyNotFound)
+            Err(anyhow!("Key not found"))
         }
     }
 
