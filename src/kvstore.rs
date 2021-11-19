@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap};
+use std::fs;
 use std::fs::{File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
-use std::path::{PathBuf};
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Deserializer;
@@ -9,14 +10,15 @@ use serde_json::Deserializer;
 use crate::error::Result;
 use anyhow::{anyhow, Context};
 
-// the default file name for the kvs command log
-static DEFAULT_LOG_FILE_NAME: &str = "kvs.log";
 
 /// the main structure used for working with a KvStore
 #[derive(Debug)]
 pub struct KvStore {
-    // path to the command log, An on-disk sequence of commands, in the order originally received and executed
+    // path to the current command log
     log_path: PathBuf,
+
+    // the current log generation
+    current_log_gen: u64,
 
     // index holds all keys currently in the database.
     // It maps keys to their position within the command log
@@ -26,23 +28,30 @@ pub struct KvStore {
 impl KvStore {
 
     /// create a new KvStore
-    fn new(log_path: PathBuf) -> Self {
+    fn new(log_path: PathBuf, current_log_gen: u64) -> Self {
         KvStore {
             index: BTreeMap::new(),
-            log_path
+            log_path,
+            current_log_gen,
         }
     }
 
     /// creates a KvStore using the data from the kvs logfile located in the `working_dir`
     /// If the kvs log does not yet exist, it will be created
     pub fn open(working_dir: impl Into<PathBuf>) -> Result<KvStore> {
-        let log_path = working_dir.into().join(DEFAULT_LOG_FILE_NAME);
+        // determine the latest log file name
+        let mut current_log_name = latest_log_file(Path::new("."))?;
+        let current_log_gen = current_log_name.parse::<u64>()?;
+        current_log_name.push_str(".log");
 
+        // build a path to the current log and try open/create it
+        let log_path = working_dir.into().join(&current_log_name);
         if !log_path.exists() {
-            File::create(&log_path)?;
+            File::create(&log_path)
+                .with_context(|| format!("Failed to open log file at path {:?}", &log_path))?;
         }
 
-        let mut kvs = KvStore::new(log_path);
+        let mut kvs = KvStore::new(log_path, current_log_gen);
         // load keys from the command log
         kvs.load()?;
 
@@ -53,7 +62,7 @@ impl KvStore {
     pub fn load(&mut self) -> Result<()> {
         self.index.clear();
         let log_file = File::open(&self.log_path)
-            .context(format!("failed to open command log file at {:?}", &self.log_path))?;
+            .context(format!("failed to load log file at {:?}", &self.log_path))?;
 
         let reader = BufReader::new(log_file);
         let mut stream = Deserializer::from_reader(reader).into_iter::<Command>();
@@ -111,7 +120,7 @@ impl KvStore {
     /// use kvs::KvStore;
     /// ```
     pub fn set(&mut self, key: String, value: String) -> Result<()> {
-        let command = Command::Set { key: key.clone(), value: value.clone() };
+        let command = Command::Set { key: key.clone(), value };
         // write the command into the log
         let pos: CommandPos = self.write(&command)?;
         // insert the command's key and pos data into the index
@@ -203,5 +212,29 @@ struct CommandPos {
 impl CommandPos {
     fn new(pos: u64, len: u64) -> Self {
         CommandPos { pos, len }
+    }
+}
+
+
+/// returns the name of the latest command log file without the file suffix (i.e. '.log')
+/// If no `.log` files were found in the current directory, a new log is created
+/// It only looks at files ending in `.log` and will then sort them in ascending order, selecting
+/// the last log file.
+fn latest_log_file(dir: &Path) -> Result<String> {
+    let mut logs: Vec<PathBuf> = vec![];
+    for entry in (fs::read_dir(dir)?).flatten() {
+        if entry.file_type()?.is_file() && entry.path().extension().map_or(false, |ext| ext.to_str() == Some("log"))
+        {
+            logs.push(entry.path());
+        }
+    }
+
+    logs.sort_unstable();
+
+    if let Some(last) = logs.last() {
+        let stem = last.file_stem().ok_or(anyhow!("could not find log file stem for {:?}", last))?;
+        stem.to_str().map(String::from).ok_or(anyhow!("could not convert file stem OsStr to &str: {:?}", &stem))
+    } else {
+        Ok("1".to_string())
     }
 }

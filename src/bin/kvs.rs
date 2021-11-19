@@ -21,9 +21,11 @@ fn main() {
         ])
         .get_matches();
 
+    // create a new kvStore in the current directory
+
     let mut kvs = match KvStore::open(".") {
         Err(e) => {
-            eprintln!("{}", e);
+            eprintln!("{:#}", e);
             exit(1);
         },
         Ok(k) => k,
@@ -64,4 +66,5 @@ fn main() {
         }
         _ => panic!("unknown command received"),
     }
+
 }
