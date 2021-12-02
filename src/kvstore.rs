@@ -11,30 +11,32 @@ use serde_json::Deserializer;
 
 use crate::error::{KvsError, Result};
 
-
 // size in bytes for triggering a log compaction
 const COMPACTION_THRESHOLD: u64 = 1024 * 1024;
 
 /// The primary struct for working with a [`KvStore`].
-/// Data is persisted to "log" files when the "set" command is issued and retrieved from the files
-/// when a "get" command is issued.
+///
+/// It ensures that keys and values are persisted into a "command log" that is maintained
+/// on the local file system. The directory where these files are kept, the "working dir" is
+/// given as a parameter when first creating the KvStore.
+///
 /// Once the size of "stale" data in the logs hits the COMPACTION THRESHOLD, the log files
-/// will be compacted and stale key data will be removed.
+/// will be compacted into a new log and unused log files will be deleted.
 #[derive(Debug)]
 pub struct KvStore {
     // path to the directory containing the command log files
     working_dir: PathBuf,
 
-    // the current log generation number
+    // the current log generation number that is in use
     current_log_gen: u64,
 
     // maps generation numbers to a file Reader that will read from the log file
     readers: HashMap<u64, BufReaderWithPos<File>>,
 
-    // writer of the current log.
+    // writer of the current command log.
     writer: BufWriterWithPos<File>,
 
-    // maps keys to their location within a log file.
+    // maps keys to their position within a log file.
     index: BTreeMap<String, CommandPos>,
 
     // number of bytes representing "stale" commands that could be
@@ -43,8 +45,10 @@ pub struct KvStore {
 }
 
 impl KvStore {
-    /// creates a [`KvStore`] using the data from the kvs logfile located in the `working_dir`
-    /// If the kvs log does not yet exist, it will be created
+    /// creates a [`KvStore`] using the given `working_dir` as the directory where store's
+    /// data will be kept. If the `working_dir` does not exist it will be created.
+    ///
+    ///
     pub fn open(working_dir: impl Into<PathBuf>) -> Result<KvStore> {
         let working_dir = working_dir.into();
         fs::create_dir_all(&working_dir)?;
@@ -58,7 +62,8 @@ impl KvStore {
 
         // build buffered readers for all log files
         for gen in &log_gens {
-            let mut reader = BufReaderWithPos::new(File::open(build_log_path(&working_dir, *gen))?)?;
+            let mut reader =
+                BufReaderWithPos::new(File::open(build_log_path(&working_dir, *gen))?)?;
             // load data from the reader into the index
             uncompacted += load(*gen, &mut reader, &mut index)?;
             readers.insert(*gen, reader);
@@ -90,7 +95,8 @@ impl KvStore {
         // check for existence of key in index
         if let Some(CommandPos { gen, pos, len }) = self.index.get(&key) {
             // read the corresponding value from the log
-            let reader = self.readers
+            let reader = self
+                .readers
                 .get_mut(gen)
                 .expect("reader is missing from readers");
 
@@ -230,7 +236,6 @@ impl KvStore {
     }
 }
 
-
 /// loads the commands from the given reader into the given `index` map
 /// returns the amount of bytes that could be compacted.
 /// `gen` is the generation number of the file being read by `reader`
@@ -240,8 +245,8 @@ impl KvStore {
 fn load(
     gen: u64,
     reader: &mut BufReaderWithPos<File>,
-    index: &mut BTreeMap<String, CommandPos>) -> Result<u64>
-{
+    index: &mut BTreeMap<String, CommandPos>,
+) -> Result<u64> {
     let mut pos = reader.seek(SeekFrom::Start(0))?;
     let mut uncompacted = 0_u64;
     let mut stream = Deserializer::from_reader(reader).into_iter::<Command>();
@@ -250,7 +255,9 @@ fn load(
         let length = stream.byte_offset() as u64 - pos; // length of the command
         match command? {
             Command::Set { key, .. } => {
-                if let Some(old_command) = index.insert(key, CommandPos::new(gen, pos as u64, length)) {
+                if let Some(old_command) =
+                    index.insert(key, CommandPos::new(gen, pos as u64, length))
+                {
                     uncompacted += old_command.len;
                 }
             }
@@ -295,7 +302,6 @@ fn new_log_file(
     Ok(writer)
 }
 
-
 /// These are the command types that will be recorded in the command log(s)
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Command {
@@ -303,7 +309,6 @@ pub enum Command {
     Remove { key: String },
     //Get { key: String },
 }
-
 
 /// Holds position data for commands that have been written into a command log.
 #[derive(Debug, Copy, Clone)]
@@ -335,7 +340,6 @@ impl From<(u64, Range<u64>)> for CommandPos {
     }
 }
 
-
 /// returns the log generation numbers located in the given `dir` path, sorted in ascending order
 ///
 /// # Errors
@@ -345,18 +349,30 @@ impl From<(u64, Range<u64>)> for CommandPos {
 fn get_log_gens(dir: &Path) -> Result<Option<Vec<u64>>> {
     let mut logs: Vec<u64> = vec![];
     for entry in (fs::read_dir(dir)?).flatten() {
-        if entry.file_type()?.is_file() && entry.path().extension().map_or(false, |ext| ext.to_str() == Some("log"))
+        if entry.file_type()?.is_file()
+            && entry
+                .path()
+                .extension()
+                .map_or(false, |ext| ext.to_str() == Some("log"))
         {
             let stem = entry
                 .path()
                 .file_stem()
-                .ok_or(Error::new(ErrorKind::Other, format!("could not find log file stem for {:?}", &entry.path())))?.to_os_string();
-            let gen_str = stem
-                .to_str()
-                .map(String::from)
-                .ok_or(Error::new(ErrorKind::Other, format!("could not convert the file stem: {:?} into a str", &stem)))?;
-            let gen = gen_str.parse::<u64>()
-                .map_err(|_| KvsError::Parsing(format!("could not parse the file stem: {} into a u64", &gen_str)))?;
+                .ok_or(Error::new(
+                    ErrorKind::Other,
+                    format!("could not find log file stem for {:?}", &entry.path()),
+                ))?
+                .to_os_string();
+            let gen_str = stem.to_str().map(String::from).ok_or(Error::new(
+                ErrorKind::Other,
+                format!("could not convert the file stem: {:?} into a str", &stem),
+            ))?;
+            let gen = gen_str.parse::<u64>().map_err(|_| {
+                KvsError::Parsing(format!(
+                    "could not parse the file stem: {} into a u64",
+                    &gen_str
+                ))
+            })?;
             logs.push(gen);
         }
     }
@@ -367,7 +383,6 @@ fn get_log_gens(dir: &Path) -> Result<Option<Vec<u64>>> {
         Ok(None)
     }
 }
-
 
 /// A struct that holds a BufferedReader along with the current seek `pos` of that BufferedReader
 #[derive(Debug)]

@@ -3,7 +3,7 @@
 //!
 //! [`String`]: https://doc.rust-lang.org/std/string/struct.String.html
 
-pub use error::{Result};
+pub use error::Result;
 pub use kvstore::KvStore;
 
 mod error;

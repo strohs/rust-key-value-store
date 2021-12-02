@@ -1,6 +1,6 @@
-use std::process::exit;
 use clap::{crate_version, App, Arg, SubCommand};
 use kvs::KvStore;
+use std::process::exit;
 
 fn main() {
     let matches = App::new("kvs")
@@ -25,9 +25,9 @@ fn main() {
 
     let mut kvs = match KvStore::open(".") {
         Err(e) => {
-            eprintln!("{:#}", e);
+            eprintln!("{:?}", &e);
             exit(1);
-        },
+        }
         Ok(k) => k,
     };
 
@@ -46,11 +46,11 @@ fn main() {
                 Err(e) => {
                     println!("{}", &e);
                     exit(1);
-                },
+                }
                 Ok(Some(value)) => {
                     println!("{}", value);
                     exit(0);
-                },
+                }
                 Ok(None) => {
                     println!("Key not found");
                     exit(0);
@@ -66,5 +66,4 @@ fn main() {
         }
         _ => panic!("unknown command received"),
     }
-
 }
