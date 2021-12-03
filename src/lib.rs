@@ -4,7 +4,8 @@
 //! [`String`]: https://doc.rust-lang.org/std/string/struct.String.html
 
 pub use error::Result;
-pub use kvstore::KvStore;
+pub use engine::{KvsEngine, KvStore};
 
 mod error;
-mod kvstore;
+mod command;
+mod engine;

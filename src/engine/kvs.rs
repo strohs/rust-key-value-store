@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::Deserializer;
 
+use super::KvsEngine;
 use crate::error::{KvsError, Result};
 
 // size in bytes for triggering a log compaction
@@ -83,103 +84,10 @@ impl KvStore {
         })
     }
 
-    /// attempts to retrieve the value associated with `key`.
-    /// returns `Result<Some<value>>` if the `key` was found, else returns `Result<None>` if
-    /// the key was not found
+
+    /// Create a new log file with given generation number and adds its reader to the readers map.
     ///
-    /// # Examples
-    /// ```rust
-    /// use kvs::KvStore;
-    /// ```
-    pub fn get(&mut self, key: String) -> Result<Option<String>> {
-        // check for existence of key in index
-        if let Some(CommandPos { gen, pos, len }) = self.index.get(&key) {
-            // read the corresponding value from the log
-            let reader = self
-                .readers
-                .get_mut(gen)
-                .expect("reader is missing from readers");
-
-            reader.seek(SeekFrom::Start(*pos))?;
-            let cmd_reader = reader.take(*len);
-            if let Command::Set { value, .. } = serde_json::from_reader(cmd_reader)? {
-                Ok(Some(value))
-            } else {
-                Err(KvsError::Command(format!("invalid command found when attempting to get key: {} at gen: {} pos: {} len: {}", &key, &gen, &pos, &len)))
-            }
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// inserts the specified `key` and `value` into this `KvStore`, overriding any existing
-    /// key/value entry
-    /// # Examples
-    /// ```rust
-    /// use kvs::KvStore;
-    /// ```
-    pub fn set(&mut self, key: String, value: String) -> Result<()> {
-        let cmd = Command::Set { key, value };
-        let pos = self.writer.pos;
-        serde_json::to_writer(&mut self.writer, &cmd)?;
-        self.writer.flush()?;
-
-        // insert the command into the index
-        if let Command::Set { key, .. } = cmd {
-            if let Some(old_command) = self
-                .index
-                .insert(key, (self.current_log_gen, pos..self.writer.pos).into())
-            {
-                self.uncompacted += old_command.len;
-            }
-        }
-
-        if self.uncompacted > COMPACTION_THRESHOLD {
-            self.compact()?;
-        }
-
-        Ok(())
-    }
-
-    /// removes the specified `key` and its associated value from this KvStore
-    ///
-    /// # Errors
-    /// returns an error: "Key not found" if the given `key` was not in the KvStore
-    ///
-    /// # Examples
-    /// ```rust
-    /// use kvs::KvStore;
-    ///
-    /// ```
-    pub fn remove(&mut self, key: String) -> Result<()> {
-        if let Some(old_command) = self.index.remove(&key) {
-            // creates a value representing the "rm" command, containing its key
-            let command = Command::Remove { key };
-            // append the serialized command to the log
-            serde_json::to_writer(&mut self.writer, &command)?;
-            self.writer.flush()?;
-
-            // updated length of uncompacted data
-            self.uncompacted += old_command.len;
-
-            Ok(())
-        } else {
-            Err(KvsError::KeyNotFound)
-        }
-    }
-
-    /// serializes `command` and writes it into the log file
-    /// returns a [`CommandPos`] indicating where the command was written at within the log
-    // fn write(&mut self, command: &Command) -> Result<CommandPos> {
-    //     let serialized = command.serialize()?;
-    //     self.writer.write_all(serialized.as_bytes())?;
-    //     let start_pos = self.writer.stream_position()? - serialized.len() as u64;
-    //     Ok(CommandPos::new(self.current_log_gen, start_pos, serialized.len() as u64))
-    // }
-
-    /// Create a new log file with given generation number and add the reader to the readers map.
-    ///
-    /// Returns the writer to the log.
+    /// Returns a writer to the newly create log file.
     fn new_log_file(&mut self, gen: u64) -> Result<BufWriterWithPos<File>> {
         new_log_file(&self.working_dir, gen, &mut self.readers)
     }
@@ -236,6 +144,95 @@ impl KvStore {
     }
 }
 
+
+
+impl KvsEngine for KvStore {
+    /// inserts the specified `key` and `value` into this `KvStore`, overriding any existing
+    /// key/value entry
+    /// # Examples
+    /// ```rust
+    /// use kvs::KvStore;
+    /// ```
+    fn set(&mut self, key: String, value: String) -> Result<()> {
+        let cmd = Command::Set { key, value };
+        let pos = self.writer.pos;
+        serde_json::to_writer(&mut self.writer, &cmd)?;
+        self.writer.flush()?;
+
+        // insert the command into the index
+        if let Command::Set { key, .. } = cmd {
+            if let Some(old_command) = self
+                .index
+                .insert(key, (self.current_log_gen, pos..self.writer.pos).into())
+            {
+                self.uncompacted += old_command.len;
+            }
+        }
+
+        if self.uncompacted > COMPACTION_THRESHOLD {
+            self.compact()?;
+        }
+
+        Ok(())
+    }
+
+    /// attempts to retrieve the value associated with `key`.
+    /// returns `Result<Some<value>>` if the `key` was found, else returns `Result<None>` if
+    /// the key was not found
+    ///
+    /// # Examples
+    /// ```rust
+    /// use kvs::KvStore;
+    /// ```
+    fn get(&mut self, key: String) -> Result<Option<String>> {
+        // check for existence of key in index
+        if let Some(CommandPos { gen, pos, len }) = self.index.get(&key) {
+            // read the corresponding value from the log
+            let reader = self
+                .readers
+                .get_mut(gen)
+                .expect("reader is missing from readers");
+
+            reader.seek(SeekFrom::Start(*pos))?;
+            let cmd_reader = reader.take(*len);
+            if let Command::Set { value, .. } = serde_json::from_reader(cmd_reader)? {
+                Ok(Some(value))
+            } else {
+                Err(KvsError::Command(format!("invalid command found when attempting to get key: {} at gen: {} pos: {} len: {}", &key, &gen, &pos, &len)))
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// removes the specified `key` and its associated value from this KvStore
+    ///
+    /// # Errors
+    /// returns an error: "Key not found" if the given `key` was not in the KvStore
+    ///
+    /// # Examples
+    /// ```rust
+    /// use kvs::KvStore;
+    ///
+    /// ```
+    fn remove(&mut self, key: String) -> Result<()> {
+        if let Some(old_command) = self.index.remove(&key) {
+            // creates a value representing the "rm" command, containing its key
+            let command = Command::Remove { key };
+            // append the serialized command to the log
+            serde_json::to_writer(&mut self.writer, &command)?;
+            self.writer.flush()?;
+
+            // updated length of uncompacted data
+            self.uncompacted += old_command.len;
+
+            Ok(())
+        } else {
+            Err(KvsError::KeyNotFound)
+        }
+    }
+}
+
 /// loads the commands from the given reader into the given `index` map
 /// returns the amount of bytes that could be compacted.
 /// `gen` is the generation number of the file being read by `reader`
@@ -256,7 +253,7 @@ fn load(
         match command? {
             Command::Set { key, .. } => {
                 if let Some(old_command) =
-                    index.insert(key, CommandPos::new(gen, pos as u64, length))
+                index.insert(key, CommandPos::new(gen, pos as u64, length))
                 {
                     uncompacted += old_command.len;
                 }
@@ -351,9 +348,9 @@ fn get_log_gens(dir: &Path) -> Result<Option<Vec<u64>>> {
     for entry in (fs::read_dir(dir)?).flatten() {
         if entry.file_type()?.is_file()
             && entry
-                .path()
-                .extension()
-                .map_or(false, |ext| ext.to_str() == Some("log"))
+            .path()
+            .extension()
+            .map_or(false, |ext| ext.to_str() == Some("log"))
         {
             let stem = entry
                 .path()

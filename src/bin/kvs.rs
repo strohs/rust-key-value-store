@@ -1,5 +1,5 @@
 use clap::{crate_version, App, Arg, SubCommand};
-use kvs::KvStore;
+use kvs::{KvsEngine, KvStore};
 use std::process::exit;
 
 fn main() {
