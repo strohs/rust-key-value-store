@@ -13,7 +13,7 @@ pub trait KvsEngine {
     /// Returns `None` if the given `key` does not exist.
     fn get(&mut self, key: String) -> Result<Option<String>>;
 
-    /// Removes the given `key` from the store
+    /// Removes the given `key` (and associated value) from the store
     ///
     /// # Errors
     ///
@@ -22,5 +22,7 @@ pub trait KvsEngine {
 }
 
 mod kvs;
+mod sled;
 
 pub use self::kvs::KvStore;
+pub use self::sled::SledKvsEngine;

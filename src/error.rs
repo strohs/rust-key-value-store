@@ -1,5 +1,6 @@
 use std::io;
 use thiserror::Error;
+use std::string::FromUtf8Error;
 
 /// type alias for all operations on a [`KvStore`] that could fail with an [`Error']
 pub type Result<T> = std::result::Result<T, KvsError>;
@@ -35,14 +36,24 @@ pub enum KvsError {
     /// catch-all variant for reporting error message strings to clients
     #[error("{}", .0)]
     StringErr(String),
+
+    /// variant for sled related errors
+    #[error("sled error")]
+    Sled(#[from] sled::Error),
+
+    /// a Key or value is an invalid UTF-8 sequence
+    #[error("{}", .0)]
+    Utf8Error(#[from] FromUtf8Error)
 }
 
+/// a custom Debug implementation that will write the entire error chain
 impl std::fmt::Debug for KvsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         error_chain_fmt(self, f)
     }
 }
 
+/// writes the entire error chain of the given error `e`, to the formatter.
 fn error_chain_fmt(
     e: &impl std::error::Error,
     f: &mut std::fmt::Formatter<'_>,

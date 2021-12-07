@@ -5,7 +5,7 @@ use std::env::current_dir;
 use std::fs;
 use std::net::SocketAddr;
 use clap::{crate_version, App, Arg, arg_enum, value_t};
-use kvs::{KvsEngine, KvsError, KvStore, Result, KvsServer};
+use kvs::{KvsEngine, SledKvsEngine, KvsError, KvStore, Result, KvsServer};
 use tracing::{warn, info, Level};
 use tracing_subscriber::{FmtSubscriber};
 use std::process::exit;
@@ -111,8 +111,7 @@ fn run(opt: Opt) -> Result<()> {
 
     match opt.engine {
         Engine::kvs => run_with_engine(KvStore::open(&current_dir()?)?, opt.addr),
-        Engine::sled => panic!("sled engine not implemented yet"),
-        //Engine::sled => run_with_engine(SledKvsEngine::new(sled::open(current_dir()?)?), opt.addr),
+        Engine::sled => run_with_engine(SledKvsEngine::new(sled::open(current_dir()?)?), opt.addr),
     }
 }
 

@@ -4,7 +4,7 @@
 //! [`String`]: https://doc.rust-lang.org/std/string/struct.String.html
 
 pub use error::{Result, KvsError};
-pub use engine::{KvsEngine, KvStore};
+pub use engine::{KvsEngine, KvStore, SledKvsEngine};
 pub use server::KvsServer;
 pub use client::KvsClient;
 pub use command::{Response, Request};

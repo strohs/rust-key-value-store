@@ -29,6 +29,7 @@ use kvs::{KvsClient, KvsError, Result, Request};
 use tracing::{Level};
 use tracing_subscriber::{FmtSubscriber};
 
+// the default server IP_PORT that the client will connect to if not specified on command line
 const DEFAULT_ADDRESS: &str = "127.0.0.1:4000";
 
 /// ['Opt'] holds parsed and validated options from the command line
@@ -56,6 +57,29 @@ impl Opt {
 
         Ok(Opt::new(addr, req))
     }
+
+    /// parses the matches from the command line into an [`Opt`] struct
+    fn parse_options(matches: ArgMatches) -> Result<Self> {
+        match matches.subcommand() {
+            ("set", Some(args)) => {
+                let key = args.value_of("KEY").map(String::from).unwrap();
+                let value = args.value_of("VALUE").map(String::from).unwrap();
+                let addr = args.value_of("addr").unwrap();
+                Self::build(addr, Request::Set { key, value })
+            }
+            ("get", Some(args)) => {
+                let key = args.value_of("KEY").map(String::from).unwrap();
+                let addr = args.value_of("addr").unwrap();
+                Self::build(addr, Request::Get { key })
+            }
+            ("rm", Some(args)) => {
+                let key = args.value_of("KEY").map(String::from).unwrap();
+                let addr = args.value_of("addr").unwrap();
+                Self::build(addr, Request::Remove { key })
+            }
+            _ => panic!("unknown command received"),
+        }
+    }
 }
 
 fn main() -> Result<()> {
@@ -70,23 +94,33 @@ fn main() -> Result<()> {
             SubCommand::with_name("set")
                 .about("Set the value of a string key to a string")
                 .arg(Arg::with_name("KEY").required(true).index(1))
-                .arg(Arg::with_name("VALUE").required(true).index(2)),
+                .arg(Arg::with_name("VALUE").required(true).index(2))
+                .arg(Arg::with_name("addr")
+                         .long("addr")
+                         .value_name("IP_ADDR:PORT")
+                         .help("specifies the IP_ADDRESS:PORT of the server to connect to")
+                         .default_value(DEFAULT_ADDRESS)),
             SubCommand::with_name("get")
                 .about("Get the string value of a given string key")
-                .arg(Arg::with_name("KEY").required(true).index(1)),
+                .arg(Arg::with_name("KEY").required(true).index(1))
+                .arg(Arg::with_name("addr")
+                    .long("addr")
+                    .value_name("IP_ADDR:PORT")
+                    .help("specifies the IP_ADDRESS:PORT of the server to connect to")
+                    .default_value(DEFAULT_ADDRESS)),
             SubCommand::with_name("rm")
                 .about("Removes a given key")
-                .arg(Arg::with_name("KEY").required(true).index(1)),
+                .arg(Arg::with_name("KEY").required(true).index(1))
+                .arg(Arg::with_name("addr")
+                    .long("addr")
+                    .value_name("IP_ADDR:PORT")
+                    .help("specifies the IP_ADDRESS:PORT of the server to connect to")
+                    .default_value(DEFAULT_ADDRESS)),
         ])
-        .arg(Arg::with_name("addr")
-            .long("addr")
-            .value_name("IP_ADDR:PORT")
-            .help("sets the IP_ADDR:PORT of the server to connect to")
-            .default_value(DEFAULT_ADDRESS))
         .get_matches();
 
     // parse commands into an Opt struct
-    match parse_options(matches) {
+    match Opt::parse_options(matches) {
         Ok(opt) => run(opt),
         Err(e) => Err(e),
     }
@@ -116,26 +150,7 @@ fn run(opt: Opt) -> Result<()> {
     Ok(())
 }
 
-/// parses the matches from the command line into an [`Opt`] struct
-fn parse_options(matches: ArgMatches) -> Result<Opt> {
-    let addr = matches.value_of("addr").unwrap();
-    match matches.subcommand() {
-        ("set", Some(args)) => {
-            let key = args.value_of("KEY").map(String::from).unwrap();
-            let value = args.value_of("VALUE").map(String::from).unwrap();
-            Opt::build(addr, Request::Set { key, value })
-        }
-        ("get", Some(args)) => {
-            let key = args.value_of("KEY").map(String::from).unwrap();
-            Opt::build(addr, Request::Get { key })
-        }
-        ("rm", Some(args)) => {
-            let key = args.value_of("KEY").map(String::from).unwrap();
-            Opt::build(addr, Request::Remove { key })
-        }
-        _ => panic!("unknown command received"),
-    }
-}
+
 
 /// configures a tracing subscriber that will log to STDERR
 fn subscriber_config() {
