@@ -1,7 +1,7 @@
 //! This module provides various key/value storage engine implementations.
 use crate::Result;
 
-/// A trait representing basic functionality of a key value storage engine
+/// A trait for the basic functionality of a key/value storage engine
 pub trait KvsEngine {
     /// sets a `key` and `value`
     ///

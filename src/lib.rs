@@ -3,9 +3,14 @@
 //!
 //! [`String`]: https://doc.rust-lang.org/std/string/struct.String.html
 
-pub use error::Result;
+pub use error::{Result, KvsError};
 pub use engine::{KvsEngine, KvStore};
+pub use server::KvsServer;
+pub use client::KvsClient;
+pub use command::{Response, Request};
 
 mod error;
 mod command;
 mod engine;
+mod server;
+mod client;

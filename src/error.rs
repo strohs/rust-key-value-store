@@ -1,4 +1,3 @@
-use serde_json;
 use std::io;
 use thiserror::Error;
 
@@ -12,6 +11,7 @@ pub enum KvsError {
     /// variant for errors caused by std::io
     #[error("IO error")]
     Io {
+        /// source of the IO Error
         #[from]
         source: io::Error,
     },
@@ -24,13 +24,17 @@ pub enum KvsError {
     #[error("serialization/deserialization error")]
     Serialization(#[from] serde_json::Error),
 
-    /// variant for errors when parsing strings to an integer type
+    /// variant for errors when parsing strings to some other type
     #[error("{}", .0)]
     Parsing(String),
 
     /// variant for errors caused by an unknown or invalid command in the command log
     #[error("{}", .0)]
     Command(String),
+
+    /// catch-all variant for reporting error message strings to clients
+    #[error("{}", .0)]
+    StringErr(String),
 }
 
 impl std::fmt::Debug for KvsError {

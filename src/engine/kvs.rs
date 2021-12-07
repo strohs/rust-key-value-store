@@ -5,14 +5,16 @@ use std::io;
 use std::io::{BufReader, BufWriter, Error, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use clap::crate_version;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Deserializer;
 
 use super::KvsEngine;
 use crate::error::{KvsError, Result};
+use tracing::{debug, info, instrument};
 
-// size in bytes for triggering a log compaction
+// the size threshold (in bytes) that will trigger a log compaction
 const COMPACTION_THRESHOLD: u64 = 1024 * 1024;
 
 /// The primary struct for working with a [`KvStore`].
@@ -49,13 +51,15 @@ impl KvStore {
     /// creates a [`KvStore`] using the given `working_dir` as the directory where store's
     /// data will be kept. If the `working_dir` does not exist it will be created.
     ///
-    ///
-    pub fn open(working_dir: impl Into<PathBuf>) -> Result<KvStore> {
-        let working_dir = working_dir.into();
+    #[instrument]
+    pub fn open(working_dir: &Path) -> Result<KvStore> {
+        info!("opening KVS engine version {}", crate_version!());
         fs::create_dir_all(&working_dir)?;
+        debug!("working_dir absolute path= {:?}", working_dir.canonicalize().unwrap().to_str());
 
         // get all log gen numbers in the working dir
-        let log_gens = get_log_gens(&working_dir)?.unwrap_or(vec![]);
+        let log_gens = get_log_gens(&working_dir)?.unwrap_or_default();
+        debug!(?log_gens);
 
         let mut readers: HashMap<u64, BufReaderWithPos<File>> = HashMap::new();
         let mut index = BTreeMap::new();
@@ -69,16 +73,18 @@ impl KvStore {
             uncompacted += load(*gen, &mut reader, &mut index)?;
             readers.insert(*gen, reader);
         }
+        debug!(uncompacted);
 
         // build a writer into the current gen log
         let current_log_gen = log_gens.last().unwrap_or(&0) + 1;
+        debug!(current_log_gen);
         let writer = new_log_file(&working_dir, current_log_gen, &mut readers)?;
 
         Ok(KvStore {
             index,
             readers,
             writer,
-            working_dir,
+            working_dir: working_dir.to_path_buf(),
             current_log_gen,
             uncompacted,
         })
@@ -169,6 +175,7 @@ impl KvsEngine for KvStore {
             }
         }
 
+        // check if compaction threshold reached and then do compaction
         if self.uncompacted > COMPACTION_THRESHOLD {
             self.compact()?;
         }
@@ -198,7 +205,7 @@ impl KvsEngine for KvStore {
             if let Command::Set { value, .. } = serde_json::from_reader(cmd_reader)? {
                 Ok(Some(value))
             } else {
-                Err(KvsError::Command(format!("invalid command found when attempting to get key: {} at gen: {} pos: {} len: {}", &key, &gen, &pos, &len)))
+                Err(KvsError::Command(format!("invalid command in logs for key: {} gen: {} pos: {} len: {}", &key, &gen, &pos, &len)))
             }
         } else {
             Ok(None)
@@ -286,7 +293,7 @@ fn new_log_file(
     gen: u64,
     readers: &mut HashMap<u64, BufReaderWithPos<File>>,
 ) -> Result<BufWriterWithPos<File>> {
-    let path = build_log_path(&path, gen);
+    let path = build_log_path(path, gen);
     let writer = BufWriterWithPos::new(
         OpenOptions::new()
             .create(true)
@@ -338,6 +345,8 @@ impl From<(u64, Range<u64>)> for CommandPos {
 }
 
 /// returns the log generation numbers located in the given `dir` path, sorted in ascending order
+/// This function expects that the logs will end in `.log` and that the file names (stems) will be
+/// integer strings.
 ///
 /// # Errors
 /// returns an IO Error if the given `dir` and/or log files in that dir could not be read,
@@ -352,18 +361,18 @@ fn get_log_gens(dir: &Path) -> Result<Option<Vec<u64>>> {
             .extension()
             .map_or(false, |ext| ext.to_str() == Some("log"))
         {
+            // get the file stem, convert it into a &str, then try to parse that &str to an integer
             let stem = entry
                 .path()
                 .file_stem()
-                .ok_or(Error::new(
+                .ok_or_else(|| Error::new(
                     ErrorKind::Other,
                     format!("could not find log file stem for {:?}", &entry.path()),
                 ))?
                 .to_os_string();
-            let gen_str = stem.to_str().map(String::from).ok_or(Error::new(
-                ErrorKind::Other,
-                format!("could not convert the file stem: {:?} into a str", &stem),
-            ))?;
+            let gen_str = stem.to_str()
+                .map(String::from)
+                .ok_or_else(|| Error::new(ErrorKind::Other, format!("could not convert the file stem: {:?} into a str", &stem), ))?;
             let gen = gen_str.parse::<u64>().map_err(|_| {
                 KvsError::Parsing(format!(
                     "could not parse the file stem: {} into a u64",
