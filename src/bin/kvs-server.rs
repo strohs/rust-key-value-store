@@ -1,11 +1,11 @@
-//! this binary starts the kvs server
+//! this binary starts a kvs server
 //! to see the list of commands, type: `kvs-server --help`
 
 use std::env::current_dir;
 use std::fs;
 use std::net::SocketAddr;
 use clap::{crate_version, App, Arg, arg_enum, value_t};
-use kvs::{KvsEngine, SledKvsEngine, KvsError, KvStore, Result, KvsServer};
+use kvs::{KvsEngine, KvsError, KvStore, Result, KvsServer, ThreadPool, NaiveThreadPool};
 use tracing::{warn, info, Level};
 use tracing_subscriber::{FmtSubscriber};
 use std::process::exit;
@@ -19,9 +19,9 @@ arg_enum! {
     }
 }
 
+// default values for the server command line
 const DEFAULT_ADDRESS: &str = "127.0.0.1:4000";
 const DEFAULT_ENGINE: Engine = Engine::kvs;
-// the name, file stem, of the "engine" file
 const DEFAULT_ENGINE_FILE: &str = "engine";
 
 
@@ -64,7 +64,7 @@ fn main() {
     // set up a tracing subscriber to log to STDERR
     subscriber_config();
 
-    // parse command line args
+    // parse command line arguments using clap
     let matches = App::new("kvs-server")
         .version(crate_version!())
         .author("strohs <strohs1@gmail.com>")
@@ -77,7 +77,7 @@ fn main() {
         .arg(Arg::with_name("engine")
             .long("engine")
             .value_name("ENGINE_NAME")
-            .help("sets the storage engine to use, either 'kvs' or 'sled'")
+            .help("sets the storage engine to use, currently only 'kvs' is supported")
             .default_value("kvs"))
         .get_matches();
 
@@ -100,7 +100,7 @@ fn main() {
     }
 }
 
-
+/// starts a kvs server
 fn run(opt: Opt) -> Result<()> {
     info!("kvs-server {}", env!("CARGO_PKG_VERSION"));
     info!("Storage engine: {}", opt.engine);
@@ -111,20 +111,25 @@ fn run(opt: Opt) -> Result<()> {
 
     match opt.engine {
         Engine::kvs => run_with_engine(KvStore::open(&current_dir()?)?, opt.addr),
-        Engine::sled => run_with_engine(SledKvsEngine::new(sled::open(current_dir()?)?), opt.addr),
+        Engine::sled => panic!("sled not currently implemented"),
+        //Engine::sled => run_with_engine(SledKvsEngine::new(sled::open(current_dir()?)?), opt.addr),
     }
 }
 
+
 fn run_with_engine<E: KvsEngine>(engine: E, addr: SocketAddr) -> Result<()> {
-    let server = KvsServer::new(engine);
+    let pool = NaiveThreadPool::new(4).unwrap();
+    let server = KvsServer::new(engine, pool);
     server.run(addr)
 }
 
-/// determines if there is an "engine" file in use and returns the value of that file, else None
+/// determines if an "engine" file exists in the current directory and if so, returns a
+/// ['Engine'] variant based on the string value within the engine file.
 ///
-/// returns `Ok(None)` if an "engine" file does not (yet) exist, `Some(Engine)`
-/// if the engine file exists and was parsed successfully
-/// Errors if the engine file contains invalid data
+/// returns `Ok(None)` if an "engine" file does not (yet) exist,
+/// returns `Some(Engine)` if the engine file exists and was parsed successfully
+/// # Errors
+/// returns ['KvsError'] if the engine file contains invalid string data
 ///
 fn current_engine() -> Result<Option<Engine>> {
     let engine = current_dir()?.join(DEFAULT_ENGINE_FILE);

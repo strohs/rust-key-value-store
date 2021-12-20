@@ -31,7 +31,7 @@ pub enum KvsError {
 
     /// variant for errors caused by an unknown or invalid command in the command log
     #[error("{}", .0)]
-    Command(String),
+    InvalidCommand(String),
 
     /// catch-all variant for reporting error message strings to clients
     #[error("{}", .0)]
@@ -43,7 +43,11 @@ pub enum KvsError {
 
     /// a Key or value is an invalid UTF-8 sequence
     #[error("{}", .0)]
-    Utf8Error(#[from] FromUtf8Error)
+    Utf8Error(#[from] FromUtf8Error),
+
+    /// variant for errors caused during type serialization/deserialization
+    #[error("{}", .0)]
+    Locking(String),
 }
 
 /// a custom Debug implementation that will write the entire error chain

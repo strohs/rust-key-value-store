@@ -1,181 +1,268 @@
-use std::collections::{BTreeMap, HashMap};
+use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::fs;
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::io::{BufReader, BufWriter, Error, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
 use clap::crate_version;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Deserializer;
+use dashmap::DashMap;
 
 use super::KvsEngine;
 use crate::error::{KvsError, Result};
-use tracing::{debug, info, instrument};
+use tracing::{debug, info, error, instrument};
+use tracing::field::debug;
 
-// the size threshold (in bytes) that will trigger a log compaction
+// the size of stale data, in bytes, that will trigger a log compaction
 const COMPACTION_THRESHOLD: u64 = 1024 * 1024;
 
-/// The primary struct for working with a [`KvStore`].
+/// A multi-threaded, key-value storage engine.
 ///
-/// It ensures that keys and values are persisted into a "command log" that is maintained
-/// on the local file system. The directory where these files are kept, the "working dir" is
-/// given as a parameter when first creating the KvStore.
+/// Keys and values are persisted across various "command logs" located on the local file system,
 ///
 /// Once the size of "stale" data in the logs hits the COMPACTION THRESHOLD, the log files
-/// will be compacted into a new log and unused log files will be deleted.
-#[derive(Debug)]
+/// will be compacted into a new log file and unused log files will be deleted.
+///
+/// # Examples
+/// ```rust
+/// use kvs::{KvsEngine, KvStore};
+/// use std::path::Path;
+///
+/// // create and open a new KvStore, using the current directory to store command logs
+/// let kvs: KvsEngine = KvStore::open(Path::new("."));
+///
+/// // set a key and value in the store
+/// kvs.set("myKey".to_string(), "myValue".to_string());
+///
+/// // retrieve the value of "myKey"
+/// kvs.get("myKey".to_string());  // Ok(Some("myValue"))
+///
+/// // remove a key and value from the store
+/// kvs.remove("myKey".to_string()); // Ok(())
+///
+/// // remove a key that doesn't exist
+/// kvs.remove("fakeKey".to_string()); // Err(KvsError::KeyNotFound)
+/// ```
+#[derive(Debug, Clone)]
 pub struct KvStore {
-    // path to the directory containing the command log files
-    working_dir: PathBuf,
+    // the directory containing the command log files
+    working_dir: Arc<PathBuf>,
 
-    // the current log generation number that is in use
-    current_log_gen: u64,
-
-    // maps generation numbers to a file Reader that will read from the log file
-    readers: HashMap<u64, BufReaderWithPos<File>>,
+    // every KvStore gets its own single-threaded reader
+    reader: KvsReader,
 
     // writer of the current command log.
-    writer: BufWriterWithPos<File>,
+    writer: Arc<Mutex<KvsWriter>>,
 
-    // maps keys to their position within a log file.
-    index: BTreeMap<String, CommandPos>,
+    // maps a key to the position of its value within a log file
+    index: Arc<DashMap<String, CommandPos>>,
 
-    // number of bytes representing "stale" commands that could be
-    // deleted during a compaction.
-    uncompacted: u64,
 }
 
 impl KvStore {
-    /// creates a [`KvStore`] using the given `working_dir` as the directory where store's
-    /// data will be kept. If the `working_dir` does not exist it will be created.
-    ///
+    /// creates a [`KvStore`] using the given `working_dir` as the directory for the command
+    /// logs. If the `working_dir` does not exist it will be created.
     #[instrument]
     pub fn open(working_dir: &Path) -> Result<KvStore> {
         info!("opening KVS engine version {}", crate_version!());
         fs::create_dir_all(&working_dir)?;
-        debug!("working_dir absolute path= {:?}", working_dir.canonicalize().unwrap().to_str());
+        debug!("working_dir path= {:?}", working_dir.canonicalize().unwrap().to_str());
+        let path = Arc::new(working_dir.to_path_buf());
 
         // get all log gen numbers in the working dir
-        let log_gens = get_log_gens(&working_dir)?.unwrap_or_default();
+        let log_gens = get_log_gens(&*path)?.unwrap_or_default();
         debug!(?log_gens);
 
-        let mut readers: HashMap<u64, BufReaderWithPos<File>> = HashMap::new();
-        let mut index = BTreeMap::new();
+        let mut readers = BTreeMap::new();
+        let index = Arc::new(DashMap::new());
         let mut uncompacted = 0_u64;
 
-        // build buffered readers for all log files
+        // build buffered readers for all log files in the working_dir
         for gen in &log_gens {
             let mut reader =
-                BufReaderWithPos::new(File::open(build_log_path(&working_dir, *gen))?)?;
+                BufReaderWithPos::new(File::open(build_log_path(&*path, *gen))?)?;
             // load data from the reader into the index
-            uncompacted += load(*gen, &mut reader, &mut index)?;
+            uncompacted += load(*gen, &mut reader, &*index)?;
             readers.insert(*gen, reader);
         }
-        debug!(uncompacted);
+        debug!(?uncompacted);
 
-        // build a writer into the current gen log
+        // determine the largest generation number
         let current_log_gen = log_gens.last().unwrap_or(&0) + 1;
-        debug!(current_log_gen);
-        let writer = new_log_file(&working_dir, current_log_gen, &mut readers)?;
+        debug!(?current_log_gen);
+
+        // build a KvsReader
+        let reader = KvsReader {
+            path: path.clone(),
+            readers: RefCell::new(readers),
+            latest_comp_gen: Arc::new(AtomicU64::new(0)),
+        };
+
+        // build a new log file where new commands will be written to
+        let buf_writer = new_log_file(&*path, current_log_gen)?;
+        let writer = KvsWriter {
+            reader: reader.clone(),
+            writer: buf_writer,
+            uncompacted,
+            current_gen: current_log_gen,
+            path: path.clone(),
+            index: index.clone(),
+        };
 
         Ok(KvStore {
-            index,
-            readers,
-            writer,
-            working_dir: working_dir.to_path_buf(),
-            current_log_gen,
-            uncompacted,
+            working_dir: path.clone(),
+            index: index.clone(),
+            reader,
+            writer: Arc::new(Mutex::new(writer)),
         })
     }
 
-
-    /// Create a new log file with given generation number and adds its reader to the readers map.
-    ///
-    /// Returns a writer to the newly create log file.
-    fn new_log_file(&mut self, gen: u64) -> Result<BufWriterWithPos<File>> {
-        new_log_file(&self.working_dir, gen, &mut self.readers)
-    }
-
-    /// Clears stale entries in the command log.
-    pub fn compact(&mut self) -> Result<()> {
-        // increase current gen by 2. current_gen + 1 is for the compaction file.
-        let compaction_gen = self.current_log_gen + 1;
-        self.current_log_gen += 2;
-        self.writer = self.new_log_file(self.current_log_gen)?;
-
-        let mut compaction_writer = self.new_log_file(compaction_gen)?;
-
-        let mut new_pos = 0; // pos in the new log file.
-
-        // iterate over all CommandPos values in the index btree map an write them into the
-        // compaction log
-        for cmd_pos in &mut self.index.values_mut() {
-            // get the reader for the generation log file the commandPos is pointing to
-            let reader = self
-                .readers
-                .get_mut(&cmd_pos.gen)
-                .expect("Cannot find log reader");
-            // seek to the position of the command within the log file
-            if reader.pos != cmd_pos.pos {
-                reader.seek(SeekFrom::Start(cmd_pos.pos))?;
-            }
-
-            // read the command from the log and copy it to the compaction log
-            let mut entry_reader = reader.take(cmd_pos.len);
-            let len = io::copy(&mut entry_reader, &mut compaction_writer)?;
-            // update cmd_pos with its new location info within the (new) compaction log
-            *cmd_pos = (compaction_gen, new_pos..new_pos + len).into();
-            // increment the count of (bytes) that have been written in the compaction log
-            new_pos += len;
-        }
-
-        compaction_writer.flush()?;
-
-        // remove stale log files by comparing gen numbers with the current compaction gen
-        let stale_gens: Vec<_> = self
-            .readers
-            .keys()
-            .filter(|&&gen| gen < compaction_gen)
-            .cloned()
-            .collect();
-        for stale_gen in stale_gens {
-            self.readers.remove(&stale_gen);
-            fs::remove_file(build_log_path(&self.working_dir, stale_gen))?;
-        }
-        self.uncompacted = 0;
-
-        Ok(())
-    }
 }
 
 
-
 impl KvsEngine for KvStore {
-    /// inserts the specified `key` and `value` into this `KvStore`, overriding any existing
-    /// key/value entry
-    /// # Examples
-    /// ```rust
-    /// use kvs::KvStore;
-    /// ```
+
+    fn set(&self, key: String, value: String) -> Result<()> {
+        self.writer.lock().unwrap().set(key, value)
+    }
+
+    #[instrument]
+    fn get(&self, key: String) -> Result<Option<String>> {
+        // check for existence of key in index
+        if let Some(command) = self.index.get(&key) {
+            // get a reader based on the command generation
+            if let Command::Set { value, .. } = self.reader.read_command(*command.value())? {
+                Ok(Some(value))
+            } else {
+                error!("could not get command for key: {} command: {:?}", &key, &command.value());
+                Err(KvsError::InvalidCommand(format!("invalid command in logs for key: {}", &key)))
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn remove(&self, key: String) -> Result<()> {
+        self.writer.lock().unwrap().remove(key)
+    }
+}
+
+/// `KvsReader` maintains a map of readers to all command logs currently in use.
+///
+/// Every `KvStore` instance has its own `KvsReader` and every `KvsReader`
+/// opens the same files separately; so a `KvsReader` can read concurrently through
+/// multiple `KvStore`s in different threads.
+#[derive(Debug)]
+struct KvsReader {
+    path: Arc<PathBuf>,
+    readers: RefCell<BTreeMap<u64, BufReaderWithPos<File>>>,
+    // generation of the latest compaction file
+    latest_comp_gen: Arc<AtomicU64>,
+}
+
+impl KvsReader {
+    /// Removes handles to files that are no longer needed.
+    ///
+    /// Files are no longer needed when their generation number is
+    /// less than the `latest_comp_gen`. Files will become "stale" after a compaction
+    /// finishes, so their is no point keeping them around, the latest compaction file
+    /// will have the sum of all gerational files before it
+    fn remove_stale_handles(&self) {
+        let mut readers = self.readers.borrow_mut();
+        while !readers.is_empty() {
+            let first_gen = *readers.keys().next().unwrap();
+            if self.latest_comp_gen.load(Ordering::SeqCst) <= first_gen {
+                break;
+            }
+            readers.remove(&first_gen);
+        }
+    }
+
+    /// Read the log file at the given `CommandPos`.
+    fn read_and<F, R>(&self, cmd_pos: CommandPos, f: F) -> Result<R>
+        where
+            F: FnOnce(io::Take<&mut BufReaderWithPos<File>>) -> Result<R>,
+    {
+        self.remove_stale_handles();
+
+        let mut readers = self.readers.borrow_mut();
+        // Open the file if we haven't opened it in this `KvStoreReader`.
+        // We don't use entry API here because we want the errors to be propogated.
+        if !readers.contains_key(&cmd_pos.gen) {
+            let reader = BufReaderWithPos::new(File::open(build_log_path(&self.path, cmd_pos.gen))?)?;
+            readers.insert(cmd_pos.gen, reader);
+        }
+        let reader = readers.get_mut(&cmd_pos.gen).unwrap();
+        reader.seek(SeekFrom::Start(cmd_pos.pos))?;
+        let cmd_reader = reader.take(cmd_pos.len);
+        f(cmd_reader)
+    }
+
+    // Read the log file at the given `CommandPos` and deserialize it to `Command`.
+    fn read_command(&self, cmd_pos: CommandPos) -> Result<Command> {
+        self.read_and(cmd_pos, |cmd_reader| {
+            Ok(serde_json::from_reader(cmd_reader)?)
+        })
+    }
+}
+
+impl Clone for KvsReader {
+    fn clone(&self) -> KvsReader {
+        KvsReader {
+            path: Arc::clone(&self.path),
+            latest_comp_gen: Arc::clone(&self.latest_comp_gen),
+            // every KvsReader will have their own map of readers
+            readers: RefCell::new(BTreeMap::new()),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct KvsWriter {
+    reader: KvsReader,
+    writer: BufWriterWithPos<File>,
+    // the current log generation number
+    current_gen: u64,
+    // the number of bytes representing "stale" commands that could be
+    // deleted during a compaction
+    uncompacted: u64,
+    // the path to the directory containg the kvs logs files
+    path: Arc<PathBuf>,
+    // a handle to the in-menory index
+    index: Arc<DashMap<String, CommandPos>>,
+}
+
+impl KvsWriter {
+
+    /// sets the given `key` and `value` into the `index` and also writes them into
+    /// the log file
+    #[instrument]
     fn set(&mut self, key: String, value: String) -> Result<()> {
+        // create a Set command variant
         let cmd = Command::Set { key, value };
+        // set pos to the current position of the writer which is usually at the end of the log
         let pos = self.writer.pos;
+        // serialize the command into the log using serde and flush the writer
         serde_json::to_writer(&mut self.writer, &cmd)?;
         self.writer.flush()?;
 
-        // insert the command into the index
         if let Command::Set { key, .. } = cmd {
-            if let Some(old_command) = self
-                .index
-                .insert(key, (self.current_log_gen, pos..self.writer.pos).into())
-            {
-                self.uncompacted += old_command.len;
+            // check if the key currently exists in the index, if so, increment
+            // uncompacted with the old.len, as that data is now stale and will be overriden with new key
+            if let Some(old_cmd) = self.index.get(&key) {
+                self.uncompacted += old_cmd.value().len;
             }
+            // insert the key along with its CommandPos data
+            self.index.insert(key, (self.current_gen, pos..self.writer.pos).into());
         }
 
-        // check if compaction threshold reached and then do compaction
+        // run a log compaction if needed
         if self.uncompacted > COMPACTION_THRESHOLD {
             self.compact()?;
         }
@@ -183,73 +270,98 @@ impl KvsEngine for KvStore {
         Ok(())
     }
 
-    /// attempts to retrieve the value associated with `key`.
-    /// returns `Result<Some<value>>` if the `key` was found, else returns `Result<None>` if
-    /// the key was not found
-    ///
-    /// # Examples
-    /// ```rust
-    /// use kvs::KvStore;
-    /// ```
-    fn get(&mut self, key: String) -> Result<Option<String>> {
-        // check for existence of key in index
-        if let Some(CommandPos { gen, pos, len }) = self.index.get(&key) {
-            // read the corresponding value from the log
-            let reader = self
-                .readers
-                .get_mut(gen)
-                .expect("reader is missing from readers");
-
-            reader.seek(SeekFrom::Start(*pos))?;
-            let cmd_reader = reader.take(*len);
-            if let Command::Set { value, .. } = serde_json::from_reader(cmd_reader)? {
-                Ok(Some(value))
-            } else {
-                Err(KvsError::Command(format!("invalid command in logs for key: {} gen: {} pos: {} len: {}", &key, &gen, &pos, &len)))
-            }
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// removes the specified `key` and its associated value from this KvStore
-    ///
-    /// # Errors
-    /// returns an error: "Key not found" if the given `key` was not in the KvStore
-    ///
-    /// # Examples
-    /// ```rust
-    /// use kvs::KvStore;
-    ///
-    /// ```
+    /// remove the given `key` from the index
+    #[instrument]
     fn remove(&mut self, key: String) -> Result<()> {
-        if let Some(old_command) = self.index.remove(&key) {
-            // creates a value representing the "rm" command, containing its key
-            let command = Command::Remove { key };
-            // append the serialized command to the log
-            serde_json::to_writer(&mut self.writer, &command)?;
+        if self.index.contains_key(&key) {
+            let cmd = Command::Remove { key };
+            let pos = self.writer.pos;
+            // serialze the remove command into the log and flush
+            serde_json::to_writer(&mut self.writer, &cmd)?;
             self.writer.flush()?;
 
-            // updated length of uncompacted data
-            self.uncompacted += old_command.len;
+            if let Command::Remove { key } = cmd {
+                let (_key, old_cmd) = self.index.remove(&key).expect("key not found");
+                // update uncompacted with the removed length
+                self.uncompacted += old_cmd.len;
+                // the "remove" command itself can be deleted in the next compaction
+                // so we add its length to `uncompacted`
+                self.uncompacted += self.writer.pos - pos;
+            }
 
+            // run a compaction if needed
+            if self.uncompacted > COMPACTION_THRESHOLD {
+                self.compact()?;
+            }
             Ok(())
         } else {
             Err(KvsError::KeyNotFound)
         }
     }
+
+    /// Clears stale entries in the log.
+    #[instrument]
+    fn compact(&mut self) -> Result<()> {
+        // increase current gen by 2. current_gen + 1 is for the compaction file
+        let compaction_gen = self.current_gen + 1;
+        self.current_gen += 2;
+        self.writer = new_log_file(&self.path, self.current_gen)?;
+        debug!("compaction started, compaction_gen={}, current_gen={}", &compaction_gen, &self.current_gen);
+
+        let mut compaction_writer = new_log_file(&self.path, compaction_gen)?;
+
+        let mut new_pos = 0; // pos in the new log file
+        for entry in self.index.iter() {
+            let len = self.reader.read_and(*entry.value(), |mut entry_reader| {
+                Ok(io::copy(&mut entry_reader, &mut compaction_writer)?)
+            })?;
+            self.index.insert(
+                entry.key().clone(),
+                (compaction_gen, new_pos..new_pos + len).into(),
+            );
+            new_pos += len;
+        }
+        compaction_writer.flush()?;
+
+        self.reader
+            .latest_comp_gen
+            .store(compaction_gen, Ordering::SeqCst);
+        self.reader.remove_stale_handles();
+
+        // remove stale log files
+        // Note that actually these files are not deleted immediately because `KvStoreReader`s
+        // still keep open file handles. When `KvStoreReader` is used next time, it will clear
+        // its stale file handles. On Unix, the files will be deleted after all the handles
+        // are closed. On Windows, the deletions below will fail and stale files are expected
+        // to be deleted in the next compaction.
+
+        let stale_gens = get_log_gens(&*self.path)?.unwrap_or_default();
+        stale_gens
+            .iter()
+            .filter(|&&gen| gen < compaction_gen)
+            .for_each(|stale_gen| {
+                let file_path = build_log_path(&*self.path, *stale_gen);
+                debug!("{:?} marked as stale", &file_path);
+                if let Err(e) = fs::remove_file(&file_path) {
+                    error!("{:?} cannot be deleted: {}", file_path, e);
+                }
+            });
+        self.uncompacted = 0;
+        debug("compaction finished");
+        Ok(())
+    }
 }
 
-/// loads the commands from the given reader into the given `index` map
-/// returns the amount of bytes that could be compacted.
-/// `gen` is the generation number of the file being read by `reader`
+/// loads the commands from the given reader into the store's `index`.
+/// Returns the amount of bytes that could be compacted.
+/// `gen` is the generation number of the log file being read by `reader`
 ///
 /// # Errors
 /// IO Errors will be returned if any log file could not be opened/read
 fn load(
     gen: u64,
     reader: &mut BufReaderWithPos<File>,
-    index: &mut BTreeMap<String, CommandPos>,
+    index: &DashMap<String, CommandPos>,
 ) -> Result<u64> {
     let mut pos = reader.seek(SeekFrom::Start(0))?;
     let mut uncompacted = 0_u64;
@@ -266,7 +378,7 @@ fn load(
                 }
             }
             Command::Remove { key } => {
-                if let Some(old_command) = index.remove(&key) {
+                if let Some((_key, old_command)) = index.remove(&key) {
                     uncompacted += old_command.len;
                 }
                 // this "remove" command itself can be deleted in the next compaction
@@ -280,20 +392,15 @@ fn load(
 }
 
 /// Constructs a log file path using the `gen` number as the file stem and the appending the
-/// suffix ".log" to it. The log file name is then joined to the current working directory path
+/// suffix **.log** to it. The log file name is then joined to the given `dir` path
 fn build_log_path(dir: &Path, gen: u64) -> PathBuf {
     dir.join(format!("{}.log", gen))
 }
 
-/// Create a new log file with given generation number and add the reader to the readers map.
-///
-/// Returns the writer to the log.
-fn new_log_file(
-    path: &Path,
-    gen: u64,
-    readers: &mut HashMap<u64, BufReaderWithPos<File>>,
-) -> Result<BufWriterWithPos<File>> {
-    let path = build_log_path(path, gen);
+/// Creates and joins a new log file with the given `gen` number to the given `path`.
+/// Returns a new [`BufWriterWithPos`] to the newly created log file.
+fn new_log_file(path: &Path, gen: u64) -> Result<BufWriterWithPos<File>> {
+    let path = build_log_path(&path, gen);
     let writer = BufWriterWithPos::new(
         OpenOptions::new()
             .create(true)
@@ -301,27 +408,25 @@ fn new_log_file(
             .append(true)
             .open(&path)?,
     )?;
-
-    readers.insert(gen, BufReaderWithPos::new(File::open(&path)?)?);
     Ok(writer)
 }
 
 /// These are the command types that will be recorded in the command log(s)
+/// NOTE that "GET" commands are not stored in the logs
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Command {
     Set { key: String, value: String },
     Remove { key: String },
-    //Get { key: String },
 }
 
-/// Holds position data for commands that have been written into a command log.
+/// Position data for commands that will be written to a log
 #[derive(Debug, Copy, Clone)]
 struct CommandPos {
-    // the log generation number
+    // the log generation number that the command is stored in
     gen: u64,
-    // position of the command with the log (byte offset)
+    // start position of the command within a log, i.e. the byte offset from the start of the log
     pos: u64,
-    // the total length of the command data
+    // the total length of the command data in bytes
     len: u64,
 }
 
@@ -332,9 +437,8 @@ impl CommandPos {
     }
 }
 
-/// enables conversion from a tuple of (generation number, pos_start..pos_end) into
-/// a `CommandPos`. The len of the command pos will be computed from the range
 impl From<(u64, Range<u64>)> for CommandPos {
+    /// Builds a [`CommandPos`] from a tuple of `(generation-number, pos_start..pos_end)`
     fn from((gen, range): (u64, Range<u64>)) -> Self {
         CommandPos {
             gen,
@@ -344,9 +448,11 @@ impl From<(u64, Range<u64>)> for CommandPos {
     }
 }
 
-/// returns the log generation numbers located in the given `dir` path, sorted in ascending order
-/// This function expects that the logs will end in `.log` and that the file names (stems) will be
-/// integer strings.
+/// Searches for kvs ".log" files within the given `dir`.
+/// Returns the generation numbers of all ".log" files that were found, sorted in ascending order.
+///
+/// This function expects the log files will end with a `.log` suffix and that the
+/// file names, (i.e. the file stems), will be valid integer strings.
 ///
 /// # Errors
 /// returns an IO Error if the given `dir` and/or log files in that dir could not be read,
@@ -354,6 +460,7 @@ impl From<(u64, Range<u64>)> for CommandPos {
 /// or if a file stem could not be converted to an integer
 fn get_log_gens(dir: &Path) -> Result<Option<Vec<u64>>> {
     let mut logs: Vec<u64> = vec![];
+
     for entry in (fs::read_dir(dir)?).flatten() {
         if entry.file_type()?.is_file()
             && entry
@@ -390,7 +497,7 @@ fn get_log_gens(dir: &Path) -> Result<Option<Vec<u64>>> {
     }
 }
 
-/// A struct that holds a BufferedReader along with the current seek `pos` of that BufferedReader
+/// A struct that holds a [`BufReader`] along with the current seek `pos` of that BufferedReader
 #[derive(Debug)]
 struct BufReaderWithPos<R: Read + Seek> {
     reader: BufReader<R>,
