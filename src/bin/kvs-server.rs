@@ -5,7 +5,7 @@ use std::env::current_dir;
 use std::fs;
 use std::net::SocketAddr;
 use clap::{crate_version, App, Arg, arg_enum, value_t};
-use kvs::{KvsEngine, KvsError, KvStore, Result, KvsServer, ThreadPool, NaiveThreadPool};
+use kvs::{KvsEngine, KvsError, KvStore, Result, KvsServer, ThreadPool, SharedQueueThreadPool};
 use tracing::{warn, info, Level};
 use tracing_subscriber::{FmtSubscriber};
 use std::process::exit;
@@ -118,7 +118,8 @@ fn run(opt: Opt) -> Result<()> {
 
 
 fn run_with_engine<E: KvsEngine>(engine: E, addr: SocketAddr) -> Result<()> {
-    let pool = NaiveThreadPool::new(4).unwrap();
+    // created a thread pool with 4 threads, backed by a shared channel
+    let pool = SharedQueueThreadPool::new(4).unwrap();
     let server = KvsServer::new(engine, pool);
     server.run(addr)
 }

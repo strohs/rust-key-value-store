@@ -7,7 +7,7 @@ pub use error::{Result, KvsError};
 pub use engine::{KvsEngine, KvStore};
 pub use server::KvsServer;
 pub use client::KvsClient;
-pub use thread_pool::{ThreadPool, NaiveThreadPool};
+pub use thread_pool::{ThreadPool, SharedQueueThreadPool};
 pub use command::{Response, Request};
 
 mod error;
