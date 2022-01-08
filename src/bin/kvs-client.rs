@@ -1,4 +1,6 @@
-//! The kvs-client executable supports the following command line arguments:
+//! The kvs-client executable
+//!
+//! It supports the following command line arguments:
 //!
 //! `kvs-client set <KEY> <VALUE> [--addr IP-PORT]`
 //!
@@ -53,7 +55,9 @@ impl Opt {
     fn build(addr: &str, req: Request) -> Result<Opt> {
         let addr: SocketAddr = addr
             .parse()
-            .map_err(|_| KvsError::Parsing(format!("could not parse {} into an IP addess and port", &addr)))?;
+            .map_err(
+                |_| KvsError::Parsing(format!("could not parse {} into an IP addess and port", &addr))
+            )?;
 
         Ok(Opt::new(addr, req))
     }
@@ -149,8 +153,6 @@ fn run(opt: Opt) -> Result<()> {
     }
     Ok(())
 }
-
-
 
 /// configures a tracing subscriber that will log to STDERR
 fn subscriber_config() {

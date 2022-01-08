@@ -6,7 +6,38 @@ use serde_json::Deserializer;
 use crate::command::{Request, Response};
 use crate::{KvsError, Result};
 
-/// `KvsClient` contains the functionality for communication with a [`KvsServer`]
+/// The `KvsClient` struct is used to issue synchronous command [`Request`]s to a running [`KvsServer`].
+///
+/// It can issue "GET", "SET", and "REMOVE" operations, and then wait for (and parse) the [`Response`] from the server.
+///
+/// # Example
+/// Connect to a KvsServer running at 127.0.0.1:4000 and then issue a "get" request to get the value
+/// associated with the key "mykey".
+/// ```rust
+/// use kvs::KvsClient;
+/// # use std::error::Error;
+/// # fn main() -> Result<(), Box<dyn Error>> {
+/// #
+///
+/// // specify the IP address and port of a kvs-server
+/// let server_addr = "127.0.0.1:4000";
+/// let mut client = KvsClient::connect(server_addr)?;
+///
+/// // now try to get the value associated with a key named "mykey"
+/// match client.get("mykey".to_string()) {
+///     Ok(Some(value)) => println!("got value {}", value),
+///     Ok(None) => println!("no value for key 'mykey'"),
+///     Err(e) => println!("an error occurred {:?}", e),
+/// }
+///
+/// #
+/// # Ok(())
+/// # }
+/// ```
+///
+/// [`KvsServer`]: ../struct.KvsServer.html
+/// [`Request`]: ./enum.Request
+/// [`Response`]: ./enum.Response
 pub struct KvsClient {
     reader: Deserializer<IoRead<BufReader<TcpStream>>>,
     writer: BufWriter<TcpStream>,
@@ -14,7 +45,8 @@ pub struct KvsClient {
 
 impl KvsClient {
 
-    /// creates a client and establishes a socket connection to the server at the given `addr`
+    /// tries to create a KvsClient and establish a socket connection to a KvsServer running at
+    /// the given `addr`
     pub fn connect<A: ToSocketAddrs>(addr: A) -> Result<Self> {
         let tcp_reader = TcpStream::connect(addr)?;
         let tcp_writer = tcp_reader.try_clone()?;
@@ -26,7 +58,7 @@ impl KvsClient {
     }
 
     /// gets the value of the specified `key` from the server
-    /// ## Returns
+    /// # Returns
     /// `Ok<Some<String>>` if the value was found for the key.
     /// `Ok<None>` if there is no value associated with the key
     /// `Err<KvsError::Command>` if an error occurred when retrieving the key

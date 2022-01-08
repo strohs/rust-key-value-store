@@ -22,20 +22,22 @@ use tracing::field::debug;
 // the size of stale data, in bytes, that will trigger a log compaction
 const COMPACTION_THRESHOLD: u64 = 1024 * 1024;
 
-/// A multi-threaded, key-value storage engine.
+/// A multi-threaded, key-value storage engine implementation.
 ///
-/// Keys and values are persisted across various "command logs" located on the local file system,
+/// Keys and values are persisted across a series of "command logs" located on the local file system.
+/// Each log will be a file that begins with am integer and ends with the suffix ".log" i.e. "1.log"
+/// "2.log" etc...
 ///
-/// Once the size of "stale" data in the logs hits the COMPACTION THRESHOLD, the log files
-/// will be compacted into a new log file and unused log files will be deleted.
+/// Once the size of "stale" data in the command logs hits the COMPACTION_THRESHOLD, the files
+/// will be compacted into a new log file and unused files will be deleted.
 ///
 /// # Examples
 /// ```rust
 /// use kvs::{KvsEngine, KvStore};
 /// use std::path::Path;
 ///
-/// // create and open a new KvStore, using the current directory to store command logs
-/// let kvs: KvsEngine = KvStore::open(Path::new("."));
+/// // create and open a new KvStore, using the current directory to persist key/value data
+/// let kvs = KvStore::open(Path::new("."));
 ///
 /// // set a key and value in the store
 /// kvs.set("myKey".to_string(), "myValue".to_string());
@@ -68,6 +70,8 @@ pub struct KvStore {
 impl KvStore {
     /// creates a [`KvStore`] using the given `working_dir` as the directory for the command
     /// logs. If the `working_dir` does not exist it will be created.
+    /// # Errors
+    /// [`KvsError::Io`] is returned if the working_dir could not be created for some reason
     #[instrument]
     pub fn open(working_dir: &Path) -> Result<KvStore> {
         info!("opening KVS engine version {}", crate_version!());
@@ -97,7 +101,7 @@ impl KvStore {
         let current_log_gen = log_gens.last().unwrap_or(&0) + 1;
         debug!(?current_log_gen);
 
-        // build a KvsReader
+        // build a KvsReader for all the command log files currently in use
         let reader = KvsReader {
             path: path.clone(),
             readers: RefCell::new(readers),
@@ -122,9 +126,7 @@ impl KvStore {
             writer: Arc::new(Mutex::new(writer)),
         })
     }
-
 }
-
 
 impl KvsEngine for KvStore {
 

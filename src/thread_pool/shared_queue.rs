@@ -7,8 +7,8 @@ use tracing::{error, debug, instrument};
 /// A thread pool implemented with a shared job queue (i.e. channel).
 ///
 /// This implementation uses the MPMC [`channel`] provided by the crossbeam crate.
-/// Specifically, we are using it as a single producer, multiple consumer. The single producer
-/// is this type itself, and the threads in the pool are the consumers
+/// To be more precise, it's using it as a single producer, multiple consumer. The single producer
+/// is this SharedQueueThreadPool, and the threads in the pool are the consumers.
 ///
 /// If a spawned task panics, the old thread will be destroyed and a new one will be
 /// created. It fails silently when any failure to create the thread at the OS level
@@ -31,6 +31,7 @@ impl ThreadPool for SharedQueueThreadPool {
             let task_rx = TaskReceiver(rx.clone());
             thread::Builder::new().spawn(move || run_tasks(task_rx))?;
         }
+        debug!("created shared queue pool with {} threads", &threads);
         Ok(SharedQueueThreadPool { tx })
     }
 
@@ -68,7 +69,8 @@ impl Drop for TaskReceiver {
     }
 }
 
-/// this function waits for a task to arrive on its (wrapped) receiver, and then runs the task
+/// this function waits for a task to arrive on its (wrapped) receiver channel, and
+/// then runs the task.
 #[instrument]
 fn run_tasks(rx: TaskReceiver) {
     loop {

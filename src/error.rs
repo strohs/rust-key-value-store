@@ -2,11 +2,10 @@ use std::io;
 use thiserror::Error;
 use std::string::FromUtf8Error;
 
-/// type alias for all operations on a [`KvStore`] that could fail with an [`Error']
+/// type alias for all operations that could fail with an [`Error'](https://doc.rust-lang.org/std/error/trait.Error.html)
 pub type Result<T> = std::result::Result<T, KvsError>;
 
-/// Error variants used by ['KvsStore'].
-/// It wraps any lower level errors from third party crates
+/// Error variants used throught the ['KvsStore'] crate.
 #[derive(Error)]
 pub enum KvsError {
     /// variant for errors caused by std::io
@@ -17,7 +16,7 @@ pub enum KvsError {
         source: io::Error,
     },
 
-    /// variant for errors when a key was not found in the KV Store
+    /// variant for errors that occur when a key was not found in the KV Store
     #[error("Key not found")]
     KeyNotFound,
 
@@ -33,7 +32,7 @@ pub enum KvsError {
     #[error("{}", .0)]
     InvalidCommand(String),
 
-    /// catch-all variant for reporting error message strings to clients
+    /// catch-all variant for reporting ad-hoc error messages to clients
     #[error("{}", .0)]
     StringErr(String),
 
@@ -45,9 +44,9 @@ pub enum KvsError {
     #[error("{}", .0)]
     Utf8Error(#[from] FromUtf8Error),
 
-    /// variant for errors caused during type serialization/deserialization
-    #[error("{}", .0)]
-    Locking(String),
+    // variant for resource locking related errors
+    //#[error("{}", .0)]
+    //Locking(String),
 }
 
 /// a custom Debug implementation that will write the entire error chain

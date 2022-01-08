@@ -4,6 +4,7 @@ use super::ThreadPool;
 
 /// a simple thread-pool that is not actually a pool. It starts a new thread on every spawn
 /// request
+#[allow(dead_code)]
 pub struct NaiveThreadPool {
     threads: u32,
 }

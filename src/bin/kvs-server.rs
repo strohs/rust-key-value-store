@@ -1,12 +1,31 @@
-//! this binary starts a kvs server
-//! to see the list of commands, type: `kvs-server --help`
+//! The `kvs-server` executable supports the following command line arguments:
+///
+/// - `kvs-server [--addr IP-PORT] [--engine ENGINE-NAME]`
+///
+///   Start the server and begin listening for incoming connections. `--addr`
+///   accepts an IP address, either v4 or v6, and a port number, with the format
+///   `IP:PORT`. If `--addr` is not specified then listen on `127.0.0.1:4000`.
+///
+///   If `--engine` is specified, then `ENGINE-NAME` must be either "kvs", in which
+///   case the built-in engine is used, or "sled", in which case sled is used. If
+///   this is the first run (there is no data previously persisted) then the default
+///   value is "kvs"; if there is previously persisted data then the default is the
+///   engine already in use. If data was previously persisted with a different
+///   engine than selected, print an error and exit with a non-zero exit code.
+///
+///   Print an error and return a non-zero exit code on failure to bind a socket, if
+///   `ENGINE-NAME` is invalid, if `IP-PORT` does not parse as an address.
+///
+/// - `kvs-server -V`
+///
+///   Print the version.
 
 use std::env::current_dir;
 use std::fs;
 use std::net::SocketAddr;
 use clap::{crate_version, App, Arg, arg_enum, value_t};
-use kvs::{KvsEngine, KvsError, KvStore, Result, KvsServer, ThreadPool, SharedQueueThreadPool};
-use tracing::{warn, info, Level};
+use kvs::{KvsEngine, KvsError, KvStore, Result, KvsServer, ThreadPool, RayonThreadPool};
+use tracing::{warn, info, Level, debug};
 use tracing_subscriber::{FmtSubscriber};
 use std::process::exit;
 
@@ -100,7 +119,7 @@ fn main() {
     }
 }
 
-/// starts a kvs server
+/// starts a kvs server with the given `opt`ions
 fn run(opt: Opt) -> Result<()> {
     info!("kvs-server {}", env!("CARGO_PKG_VERSION"));
     info!("Storage engine: {}", opt.engine);
@@ -119,7 +138,7 @@ fn run(opt: Opt) -> Result<()> {
 
 fn run_with_engine<E: KvsEngine>(engine: E, addr: SocketAddr) -> Result<()> {
     // created a thread pool with 4 threads, backed by a shared channel
-    let pool = SharedQueueThreadPool::new(4).unwrap();
+    let pool = RayonThreadPool::new(4).unwrap();
     let server = KvsServer::new(engine, pool);
     server.run(addr)
 }
@@ -154,7 +173,7 @@ fn subscriber_config() {
         // all spans/events with a level higher than TRACE (e.g, debug, info, warn, etc.)
         // will be written to stdout.
         .with_max_level(Level::TRACE)
-        // log to stderr instrad of stdout
+        // log to stderr instead of stdout
         .with_writer(std::io::stderr)
         // completes the builder.
         .finish();

@@ -1,3 +1,7 @@
+//! Various thread pool implementations
+//! - [`RayonThreadPool`] a work stealing thread pool that uses the Rayon library
+//! - [`SharedQueueThreadPool`] a thread pool implemented using a shared queue
+//!
 use crate::Result;
 
 /// A pool of threads
@@ -17,8 +21,10 @@ pub trait ThreadPool {
 
 }
 
-//mod naive;
+mod naive;
 mod shared_queue;
+mod rayon_pool;
 
-//pub use self::naive::NaiveThreadPool;
+pub use self::naive::NaiveThreadPool;
 pub use self::shared_queue::SharedQueueThreadPool;
+pub use self::rayon_pool::RayonThreadPool;
