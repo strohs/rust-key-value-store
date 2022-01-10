@@ -11,9 +11,9 @@
 //!
 //! ## KvStore
 //! [`KvStore`] is the primary structure that implements the functionality of the key-value (kv) storage engine.
-//! It implement's the [`KvsEngine`] trait and is responsible for the following:
+//! It implements the [`KvsEngine`] trait and is responsible for the following:
 //! - processing the GET, SET and REMOVE operations
-//! - maintaining kv data within an in-memeory, concurrent HashMap
+//! - maintaining kv data within an in-memory, concurrent HashMap
 //! - persisting the kv data into "command-log" files
 //! - loading kv data from the command-log files at start-up
 //! - periodically performing a command-log clean-up (a.k.a a compaction) once the size of stale data hits a certian byte size

@@ -1,7 +1,7 @@
 //! This module provides various key/value storage engine implementations.
 //! The two engines that are implemented are [`KvStore`] and a wrapper around the
-//! [`sled`] database. Sled was used in the past for benchmarking purposes but has
-//! been disabled...for now and may be re-implemented in the future.
+//! [`sled`] database engine. Sled was used in the past for benchmarking purposes but has
+//! been disabled...for now, but may be re-implemented in the future.
 //!
 //! [`sled`]: https://docs.rs/sled/latest/sled/
 use crate::Result;
