@@ -8,15 +8,20 @@ desirable Rust characteristics, including high-performance, reliability, and eas
 the best practices that might not be evident to newcomers.
 
 
-The key value store is implemented in a client/server architecture and supports three operations:
-- "GET" a value from the store
-- "SET" a key and value in the store
-- "REMOVE" a key and value from the store
+The store supports three operations:
+- "GET <key>" get a value from the store
+- "SET <key> <value>" set a key and value in the store
+- "RM <key>" remove a key and value from the store
 
-The [kv-storage engine](./src/engine/kvs.rs) keeps track of SET and REMOVE operations by persisting them to the local 
-file system across a series of log files.
-These log files are then used to rebuild the state of the store when it is (re)started. The store also implements
-some compaction logic that cleans up stale data once it reaches a certain size (in bytes).
+
+This is a command line driven application.
+It consists of separate [client](./src/bin/kvs-client.rs) and [server](./src/bin/kvs-server.rs) executables that use synchronous networking over a custom protocol
+to send/receive data to/from the kvstore engine.
+
+The client is mainly a "helper" application. You use it to send "GET", "SET", or "REMOVE" operations, one at a time, to a running server, and then print the result of the operation to the terminal.
+
+The server implements the actual [storage engine](./src/engine/kvs.rs) logic. It stores the kv pairs in-memory, but also persists them to disk, so that they can be restored every time the server is re-started.
+
 
 See the [module level documentation](./src/lib.rs) for more information.
 
@@ -25,7 +30,7 @@ See the [module level documentation](./src/lib.rs) for more information.
 You will need to have installed at least Rust version 1.56 as well as Cargo.
 
 ## Running
-build the library and its client and server executables:
+build the kvs library and its client and server executables:
 > cargo build
 
 ### start the kvs-server
@@ -37,7 +42,8 @@ build the library and its client and server executables:
     > ./target/debug/kvs-server IP-ADDRESS:PORT
 
 the server will output debug information to the terminal as it is running. The log files will be written to the same
-directory as you run the server from. They will begin with an integer and end in ".log"
+directory as you run the server from. They will begin with an integer and end in ".log". As you set kv pairs in the store you
+should be able to "cat" the .log file(s) and see them persisted there.
 
 
 ### run the client
@@ -57,3 +63,4 @@ From a separate terminal window run the client:
 - to remove a key/value pair
     > ./target/debug/kvs-client rm mykey
 
+  
