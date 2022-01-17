@@ -1,7 +1,8 @@
 # Rust Key/Value Store
 
-This is an implementation of a multi-threaded, persistent, key-value (kv) store that maps string keys to string values.
-It is written in Rust and is part of the course [Practical Networked Applications in Rust](https://github.com/pingcap/talent-plan/blob/master/courses/rust/README.md)
+A multi-threaded, persistent, key-value (kv) store that maps string keys to string values, written in Rust.
+
+It is part of my coursework from PingCap's [Practical Networked Applications in Rust](https://github.com/pingcap/talent-plan/blob/master/courses/rust/README.md)
 The goal of this course is to teach new Rust programmers how to build real-world systems programs, with all the 
 desirable Rust characteristics, including high-performance, reliability, and easy concurrency; and to do so using 
 the best practices that might not be evident to newcomers.
