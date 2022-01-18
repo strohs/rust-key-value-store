@@ -1,8 +1,12 @@
 #![deny(missing_docs)]
 //! A multi-threaded, persistent, key-value store (kvs), that maps [`String`] keys to [`String`] values.
 //!
+//! The kvs is implemented as a client/server application, using synchronous networking over a custom protocol to send/receive data to/from the KvStore.
+//!
+//! Fully functioning command-line executables are provided that can be used to start a [`kvs-server`] and then send commands to it using the [`kvs-client`].
+//!
 //! ## Supported Operations
-//! This key-value store supports three types of operations (a.k.a "commands"):
+//! The kvs supports three types of operations (a.k.a "commands"):
 //!
 //! - `GET` a value associated with a key from the store
 //! - `SET` a key/value pair in the store
@@ -10,8 +14,8 @@
 //! See the [`KvsEngine`] trait and the [`Request`] and [`Response`] types for more information on the structure of these operations.
 //!
 //! ## KvStore
-//! [`KvStore`] is the primary structure that implements the functionality of the key-value (kv) storage engine.
-//! It implements the [`KvsEngine`] trait and is responsible for the following:
+//! [`KvStore`] is the primary structure that implements the functionality of the kvs engine.
+//! It is responsible for the following tasks:
 //! - processing the GET, SET and REMOVE operations
 //! - maintaining kv data within an in-memory, concurrent HashMap
 //! - persisting the kv data into "command-log" files
@@ -19,29 +23,30 @@
 //! - periodically performing a command-log clean-up (a.k.a a compaction) once the size of stale data hits a certian byte size
 //!     - This compaction will run once the size of stale data hits the COMPACTION_THRESHOLD limit (currently set to 2 KB).
 //!
-//! ## Command Log Files
-//! KV data is persisted into a series of "command log" files, that are created every time the KvStore is (re)started.
-//! These files will have an integer file name (beginning with "1") and will end with a suffix of ".log". For example: 1.log, 2.log, etc...
-//! The directory where these files are kept is specified when you create a new [`KvStore`].
-//!
-//! The files themselves keep track of the "SET" and "REMOVE" operations received by the KvStore. The operations themselves are just serialized
-//! JSON strings.
-//! "GET" commands are not persisted as they have no bearing on the current state of the store.
-//!
 //!
 //! ## Client / Server
-//! This library also provides a basic [`client`] and [`server`] implementation that can be used to interact with the [`KvStore`] engine.
-//! The client/server code uses synchronous networking over a custom protocol to send/receive data to/from the KvStore.
-//! The custom protocol is basically either a "GET", "SET" or "REMOVE" [`Request`] encoded as a JSON string, and then sent over the wire as a TcpStream.
-//! If the server was able to successfully service a [`Request`], then an "Ok" [`Response`] will be returned, else an [`Err`] response containing
-//! an error string.
+//! The [`client`] / [`server`] structs implement the client/server functionality.  They are responsible for the networking portion of this application, but also
+//! handle the deserialization/serialization of data into a custom protocol.
 //!
-//! The [`serde`] library is used to serialize/deserialize the KV requests and responses to/from JSON.
+//! The custom protocol is simply a "GET", "SET" or "REMOVE" [`Request`] encoded to/from a JSON string, and then sent over the wire using a Rust TcpStream.
+//! If the server was able to successfully service a [`Request`], then an "Ok" [`Response`] will be returned, containing the result of the request.
+//! If an error occured, an [`Err`] response is returned, containing a description of the error.
 //!
-//! ## Client / Server executables
-//! Two command line executables are provided that can be used to interact with the ['KvStore'] as a client server.
-//! [`kvs-server`] implments the server portion and [`kvs-client`] is the client that will connect to the server.
 //!
+//! ### Client / Server executables
+//! Two command line executables are provided that can be used to interact with the ['KvStore'].
+//! See [`kvs-server`] and [`kvs-client`] for info on their use.
+//!
+//!
+//! ## Command Log Files
+//! KV data is persisted into a series of "command log" files, that are created every time the KvStore is (re)started.  BY default, these files
+//! are created in the same directory that you started the [`kvs-server`] from.
+//! The files will have an integer file name (beginning with "1") and will end with a suffix of ".log". For example: 1.log, 2.log, etc...
+//! The directory where these files are kept is specified when you create a new [`KvStore`].
+//!
+//! The .log files keep track of "SET" and "REMOVE" operations received by the KvStore. The operations themselves are just serialized
+//! JSON strings.
+//! "GET" commands are not persisted as they have no bearing on the current state of the store.
 //!
 //! [`String`]: https://doc.rust-lang.org/std/string/struct.String.html
 //! [`serde`]: https://serde.rs
