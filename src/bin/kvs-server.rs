@@ -1,4 +1,6 @@
-//! The `kvs-server` executable supports the following command line arguments:
+//! The `kvs-server` executable.
+//!
+//! It supports the following command line arguments:
 ///
 /// - `kvs-server [--addr IP-PORT] [--engine ENGINE-NAME]`
 ///
@@ -6,10 +8,10 @@
 ///   accepts an IP address, either v4 or v6, and a port number, with the format
 ///   `IP:PORT`. If `--addr` is not specified then listen on `127.0.0.1:4000`.
 ///
-///   If `--engine` is specified, then `ENGINE-NAME` must be either "kvs", in which
-///   case the built-in engine is used, or "sled", in which case sled is used. If
-///   this is the first run (there is no data previously persisted) then the default
-///   value is "kvs"; if there is previously persisted data then the default is the
+///   If `--engine` is specified, then `ENGINE-NAME` must be "kvs". Future versions
+///   of the server will support the "sled" engine, but it has not yet been fully integrated.
+///   If this is the first run (there is no data previously persisted) then the default
+///   value is "kvs". If there is previously persisted data then the default is the
 ///   engine already in use. If data was previously persisted with a different
 ///   engine than selected, print an error and exit with a non-zero exit code.
 ///
@@ -25,7 +27,7 @@ use std::fs;
 use std::net::SocketAddr;
 use clap::{crate_version, App, Arg, arg_enum, value_t};
 use kvs::{KvsEngine, KvsError, KvStore, Result, KvsServer, ThreadPool, RayonThreadPool};
-use tracing::{warn, info, Level, debug};
+use tracing::{warn, info, Level};
 use tracing_subscriber::{FmtSubscriber};
 use std::process::exit;
 

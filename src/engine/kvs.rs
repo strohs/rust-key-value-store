@@ -1,3 +1,6 @@
+use super::KvsEngine;
+use crate::error::{KvsError, Result};
+
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs;
@@ -8,14 +11,11 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
-use clap::crate_version;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Deserializer;
+use clap::crate_version;
 use dashmap::DashMap;
-
-use super::KvsEngine;
-use crate::error::{KvsError, Result};
 use tracing::{debug, info, error, instrument};
 use tracing::field::debug;
 
@@ -25,11 +25,11 @@ const COMPACTION_THRESHOLD: u64 = 1024 * 1024;
 /// A multi-threaded, key-value storage engine implementation.
 ///
 /// Keys and values are persisted across a series of "command logs" located on the local file system.
-/// Each log will be a file that begins with am integer and ends with the suffix ".log" i.e. "1.log"
-/// "2.log" etc...
+/// Each log will have a filename that begins with am integer and ends with the suffix ".log"
+/// i.e. "1.log", "2.log" etc...
 ///
 /// Once the size of "stale" data in the command logs hits the COMPACTION_THRESHOLD, the files
-/// will be compacted into a new log file and unused files will be deleted.
+/// will be compacted into a new log file and unused log files will be deleted.
 ///
 /// # Examples
 /// ```rust
@@ -68,10 +68,12 @@ pub struct KvStore {
 }
 
 impl KvStore {
-    /// creates a [`KvStore`] using the given `working_dir` as the directory for the command
+
+    /// creates a [`KvStore`] using the given `working_dir` Path as the directory for the command
     /// logs. If the `working_dir` does not exist it will be created.
+    ///
     /// # Errors
-    /// [`KvsError::Io`] is returned if the working_dir could not be created for some reason
+    /// [`KvsError::Io`] is returned if the working_dir could not be created
     #[instrument]
     pub fn open(working_dir: &Path) -> Result<KvStore> {
         info!("opening KVS engine version {}", crate_version!());
@@ -105,7 +107,7 @@ impl KvStore {
         let reader = KvsReader {
             path: path.clone(),
             readers: RefCell::new(readers),
-            latest_comp_gen: Arc::new(AtomicU64::new(0)),
+            latest_compaction_gen: Arc::new(AtomicU64::new(0)),
         };
 
         // build a new log file where new commands will be written to
@@ -163,23 +165,26 @@ impl KvsEngine for KvStore {
 #[derive(Debug)]
 struct KvsReader {
     path: Arc<PathBuf>,
+
     readers: RefCell<BTreeMap<u64, BufReaderWithPos<File>>>,
+
     // generation of the latest compaction file
-    latest_comp_gen: Arc<AtomicU64>,
+    latest_compaction_gen: Arc<AtomicU64>,
 }
 
 impl KvsReader {
+
     /// Removes handles to files that are no longer needed.
     ///
-    /// Files are no longer needed when their generation number is
-    /// less than the `latest_comp_gen`. Files will become "stale" after a compaction
+    /// Files are no longer needed when their generation number is less than the
+    /// `latest_compaction_gen`. Files will become "stale" after a compaction
     /// finishes, so their is no point keeping them around, the latest compaction file
     /// will have the sum of all gerational files before it
     fn remove_stale_handles(&self) {
         let mut readers = self.readers.borrow_mut();
         while !readers.is_empty() {
             let first_gen = *readers.keys().next().unwrap();
-            if self.latest_comp_gen.load(Ordering::SeqCst) <= first_gen {
+            if self.latest_compaction_gen.load(Ordering::SeqCst) <= first_gen {
                 break;
             }
             readers.remove(&first_gen);
@@ -194,8 +199,9 @@ impl KvsReader {
         self.remove_stale_handles();
 
         let mut readers = self.readers.borrow_mut();
+
         // Open the file if we haven't opened it in this `KvStoreReader`.
-        // We don't use entry API here because we want the errors to be propogated.
+        // We don't use entry API here because we want the errors to be propagated.
         if !readers.contains_key(&cmd_pos.gen) {
             let reader = BufReaderWithPos::new(File::open(build_log_path(&self.path, cmd_pos.gen))?)?;
             readers.insert(cmd_pos.gen, reader);
@@ -206,7 +212,7 @@ impl KvsReader {
         f(cmd_reader)
     }
 
-    // Read the log file at the given `CommandPos` and deserialize it to `Command`.
+    /// Read the log file starting at the given `CommandPos` and deserialize it into `Command`.
     fn read_command(&self, cmd_pos: CommandPos) -> Result<Command> {
         self.read_and(cmd_pos, |cmd_reader| {
             Ok(serde_json::from_reader(cmd_reader)?)
@@ -218,7 +224,7 @@ impl Clone for KvsReader {
     fn clone(&self) -> KvsReader {
         KvsReader {
             path: Arc::clone(&self.path),
-            latest_comp_gen: Arc::clone(&self.latest_comp_gen),
+            latest_compaction_gen: Arc::clone(&self.latest_compaction_gen),
             // every KvsReader will have their own map of readers
             readers: RefCell::new(BTreeMap::new()),
         }
@@ -229,13 +235,17 @@ impl Clone for KvsReader {
 struct KvsWriter {
     reader: KvsReader,
     writer: BufWriterWithPos<File>,
+
     // the current log generation number
     current_gen: u64,
+
     // the number of bytes representing "stale" commands that could be
     // deleted during a compaction
     uncompacted: u64,
+
     // the path to the directory containg the kvs logs files
     path: Arc<PathBuf>,
+
     // a handle to the in-menory index
     index: Arc<DashMap<String, CommandPos>>,
 }
@@ -326,7 +336,7 @@ impl KvsWriter {
         compaction_writer.flush()?;
 
         self.reader
-            .latest_comp_gen
+            .latest_compaction_gen
             .store(compaction_gen, Ordering::SeqCst);
         self.reader.remove_stale_handles();
 

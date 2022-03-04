@@ -1,4 +1,6 @@
-//! The kvs-client executable
+//! The kvs-client executable.
+//!
+//! It is used to send kvs command to an already running kvs-server.
 //!
 //! It supports the following command line arguments:
 //!

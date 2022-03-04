@@ -5,7 +5,7 @@ use std::string::FromUtf8Error;
 /// type alias for all operations that could fail with an [`Error'](https://doc.rust-lang.org/std/error/trait.Error.html)
 pub type Result<T> = std::result::Result<T, KvsError>;
 
-/// Error variants used throught the ['KvsStore'] crate.
+/// Error variants used throughout the ['KvsStore'] crate.
 #[derive(Error)]
 pub enum KvsError {
     /// variant for errors caused by std::io
