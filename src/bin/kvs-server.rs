@@ -73,7 +73,7 @@ impl Opt {
             None => req_engine, // no current engine, use the requested engine
             Some(cur_engine) if req_engine == cur_engine => cur_engine, // current engine is the same as the requested engine
             // current engine != requested engine
-            Some(cur_engine) => return Err(KvsError::Parsing(format!("the requested engine: {} does not match the engine currently in use: {}", req_engine.to_string(), cur_engine.to_string())))
+            Some(cur_engine) => return Err(KvsError::Parsing(format!("the requested engine: {} does not match the engine currently in use: {}", req_engine, cur_engine)))
         };
 
         Ok(Opt::new(addr, engine))

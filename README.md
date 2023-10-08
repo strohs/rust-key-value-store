@@ -7,7 +7,7 @@ course. The goal of the course is to teach Rust programmers how to build real-wo
 desirable Rust characteristics, including high-performance, reliability, and easy concurrency; and to do so using 
 the best practices that might not be evident to newcomers.
 
-The KV store supports three operations:
+This KV store supports three operations:
 - "GET <key>" get a value from the store
 - "SET <key> <value>" set a key and value in the store
 - "RM <key>" remove a key and value from the store

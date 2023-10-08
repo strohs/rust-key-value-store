@@ -2,6 +2,7 @@ use super::KvsEngine;
 use crate::error::{KvsError, Result};
 
 use std::cell::RefCell;
+use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::fs;
 use std::fs::{File, OpenOptions};
@@ -77,12 +78,12 @@ impl KvStore {
     #[instrument]
     pub fn open(working_dir: &Path) -> Result<KvStore> {
         info!("opening KVS engine version {}", crate_version!());
-        fs::create_dir_all(&working_dir)?;
+        fs::create_dir_all(working_dir)?;
         debug!("working_dir path= {:?}", working_dir.canonicalize().unwrap().to_str());
         let path = Arc::new(working_dir.to_path_buf());
 
         // get all log gen numbers in the working dir
-        let log_gens = get_log_gens(&*path)?.unwrap_or_default();
+        let log_gens = get_log_gens(&path)?.unwrap_or_default();
         debug!(?log_gens);
 
         let mut readers = BTreeMap::new();
@@ -92,9 +93,9 @@ impl KvStore {
         // build buffered readers for all log files in the working_dir
         for gen in &log_gens {
             let mut reader =
-                BufReaderWithPos::new(File::open(build_log_path(&*path, *gen))?)?;
+                BufReaderWithPos::new(File::open(build_log_path(&path, *gen))?)?;
             // load data from the reader into the index
-            uncompacted += load(*gen, &mut reader, &*index)?;
+            uncompacted += load(*gen, &mut reader, &index)?;
             readers.insert(*gen, reader);
         }
         debug!(?uncompacted);
@@ -111,7 +112,7 @@ impl KvStore {
         };
 
         // build a new log file where new commands will be written to
-        let buf_writer = new_log_file(&*path, current_log_gen)?;
+        let buf_writer = new_log_file(&path, current_log_gen)?;
         let writer = KvsWriter {
             reader: reader.clone(),
             writer: buf_writer,
@@ -202,10 +203,11 @@ impl KvsReader {
 
         // Open the file if we haven't opened it in this `KvStoreReader`.
         // We don't use entry API here because we want the errors to be propagated.
-        if !readers.contains_key(&cmd_pos.gen) {
+        if let Entry::Vacant(e) = readers.entry(cmd_pos.gen) {
             let reader = BufReaderWithPos::new(File::open(build_log_path(&self.path, cmd_pos.gen))?)?;
-            readers.insert(cmd_pos.gen, reader);
+            e.insert(reader);
         }
+
         let reader = readers.get_mut(&cmd_pos.gen).unwrap();
         reader.seek(SeekFrom::Start(cmd_pos.pos))?;
         let cmd_reader = reader.take(cmd_pos.len);
@@ -347,12 +349,12 @@ impl KvsWriter {
         // are closed. On Windows, the deletions below will fail and stale files are expected
         // to be deleted in the next compaction.
 
-        let stale_gens = get_log_gens(&*self.path)?.unwrap_or_default();
+        let stale_gens = get_log_gens(&self.path)?.unwrap_or_default();
         stale_gens
             .iter()
             .filter(|&&gen| gen < compaction_gen)
             .for_each(|stale_gen| {
-                let file_path = build_log_path(&*self.path, *stale_gen);
+                let file_path = build_log_path(&self.path, *stale_gen);
                 debug!("{:?} marked as stale", &file_path);
                 if let Err(e) = fs::remove_file(&file_path) {
                     error!("{:?} cannot be deleted: {}", file_path, e);
@@ -384,7 +386,7 @@ fn load(
         match command? {
             Command::Set { key, .. } => {
                 if let Some(old_command) =
-                index.insert(key, CommandPos::new(gen, pos as u64, length))
+                index.insert(key, CommandPos::new(gen, pos, length))
                 {
                     uncompacted += old_command.len;
                 }
@@ -412,13 +414,13 @@ fn build_log_path(dir: &Path, gen: u64) -> PathBuf {
 /// Creates and joins a new log file with the given `gen` number to the given `path`.
 /// Returns a new [`BufWriterWithPos`] to the newly created log file.
 fn new_log_file(path: &Path, gen: u64) -> Result<BufWriterWithPos<File>> {
-    let path = build_log_path(&path, gen);
+    let path = build_log_path(path, gen);
     let writer = BufWriterWithPos::new(
         OpenOptions::new()
             .create(true)
             .write(true)
             .append(true)
-            .open(&path)?,
+            .open(path)?,
     )?;
     Ok(writer)
 }
@@ -509,7 +511,7 @@ fn get_log_gens(dir: &Path) -> Result<Option<Vec<u64>>> {
     }
 }
 
-/// A struct that holds a [`BufReader`] along with the current seek `pos` of that BufferedReader
+/// A struct that wraps a [`BufReader`] along with its current seek `pos`ition
 #[derive(Debug)]
 struct BufReaderWithPos<R: Read + Seek> {
     reader: BufReader<R>,
@@ -518,7 +520,7 @@ struct BufReaderWithPos<R: Read + Seek> {
 
 impl<R: Read + Seek> BufReaderWithPos<R> {
     fn new(mut inner: R) -> Result<Self> {
-        let pos = inner.seek(SeekFrom::Current(0))?;
+        let pos = inner.stream_position()?;
         Ok(BufReaderWithPos {
             reader: BufReader::new(inner),
             pos,
@@ -549,7 +551,7 @@ struct BufWriterWithPos<W: Write + Seek> {
 
 impl<W: Write + Seek> BufWriterWithPos<W> {
     fn new(mut inner: W) -> Result<Self> {
-        let pos = inner.seek(SeekFrom::Current(0))?;
+        let pos = inner.stream_position()?;
         Ok(BufWriterWithPos {
             writer: BufWriter::new(inner),
             pos,
