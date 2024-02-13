@@ -36,9 +36,11 @@ const COMPACTION_THRESHOLD: u64 = 1024 * 1024;
 /// ```rust
 /// use kvs::{KvsEngine, KvStore};
 /// use std::path::Path;
-///
+/// # use std::error::Error;
+/// # fn main() -> Result<(), Box<dyn Error>> {
+/// #
 /// // create and open a new KvStore, using the current directory to persist key/value data
-/// let kvs = KvStore::open(Path::new("."));
+/// let kvs = KvStore::open(Path::new("."))?;
 ///
 /// // set a key and value in the store
 /// kvs.set("myKey".to_string(), "myValue".to_string());
@@ -51,6 +53,9 @@ const COMPACTION_THRESHOLD: u64 = 1024 * 1024;
 ///
 /// // remove a key that doesn't exist
 /// kvs.remove("fakeKey".to_string()); // Err(KvsError::KeyNotFound)
+/// #
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Debug, Clone)]
 pub struct KvStore {

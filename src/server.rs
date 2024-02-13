@@ -18,17 +18,17 @@ use crate::thread_pool::{ThreadPool};
 /// ```rust
 /// use std::net::SocketAddr;
 /// use std::path::Path;
-/// use kvs::{KvStore, KvsServer};
+/// use kvs::{KvStore, KvsServer, KvsEngine};
 /// use kvs::thread_pool::{RayonThreadPool, ThreadPool};
 /// # use std::error::Error;
 /// # fn main() -> Result<(), Box<dyn Error>> {
 /// let addr: SocketAddr = "127.0.0.1:4000".parse()?; // the IP address and port the server will listen on
 /// let pool = RayonThreadPool::new(4)?; // create a rayon thread pool with 4 threads
-/// let engine = KvStore::open(Path::new("."));  // create a kv-store that will persist data in the current directory
+/// let engine = KvStore::open(Path::new("."))?;  // create a kv-store that will persist data in the current directory
 /// // now create the server using the kvs engine and thread pool
 /// let server = KvsServer::new(engine, pool);
 /// // start the server
-/// server.run(addr)?;
+/// //server.run(addr)?;
 /// #
 /// # Ok(())
 /// # }
