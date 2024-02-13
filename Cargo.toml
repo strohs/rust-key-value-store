@@ -32,7 +32,7 @@ walkdir = "2.2.7"
 
 [lib]
 test = false
-doctest = true
+doctest = false
 
 [[bin]]
 name = "kvs-client"

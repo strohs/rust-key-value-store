@@ -55,7 +55,7 @@ const COMPACTION_THRESHOLD: u64 = 1024 * 1024;
 #[derive(Debug, Clone)]
 pub struct KvStore {
     // the directory containing the command log files
-    working_dir: Arc<PathBuf>,
+    //working_dir: Arc<PathBuf>,
 
     // every KvStore gets its own single-threaded reader
     reader: KvsReader,
@@ -65,7 +65,6 @@ pub struct KvStore {
 
     // maps a key to the position of its value within a log file
     index: Arc<DashMap<String, CommandPos>>,
-
 }
 
 impl KvStore {
@@ -123,7 +122,7 @@ impl KvStore {
         };
 
         Ok(KvStore {
-            working_dir: path.clone(),
+            //working_dir: path.clone(),
             index: index.clone(),
             reader,
             writer: Arc::new(Mutex::new(writer)),
@@ -179,8 +178,8 @@ impl KvsReader {
     ///
     /// Files are no longer needed when their generation number is less than the
     /// `latest_compaction_gen`. Files will become "stale" after a compaction
-    /// finishes, so their is no point keeping them around, the latest compaction file
-    /// will have the sum of all gerational files before it
+    /// finishes, so there is no point keeping them around, the latest compaction file
+    /// will have the sum of all generational files before it
     fn remove_stale_handles(&self) {
         let mut readers = self.readers.borrow_mut();
         while !readers.is_empty() {
@@ -245,10 +244,10 @@ struct KvsWriter {
     // deleted during a compaction
     uncompacted: u64,
 
-    // the path to the directory containg the kvs logs files
+    // the path to the directory containing the kvs logs files
     path: Arc<PathBuf>,
 
-    // a handle to the in-menory index
+    // a handle to the in-memory index
     index: Arc<DashMap<String, CommandPos>>,
 }
 
@@ -325,14 +324,11 @@ impl KvsWriter {
         let mut compaction_writer = new_log_file(&self.path, compaction_gen)?;
 
         let mut new_pos = 0; // pos in the new log file
-        for entry in self.index.iter() {
+        for mut entry in self.index.iter_mut() {
             let len = self.reader.read_and(*entry.value(), |mut entry_reader| {
                 Ok(io::copy(&mut entry_reader, &mut compaction_writer)?)
             })?;
-            self.index.insert(
-                entry.key().clone(),
-                (compaction_gen, new_pos..new_pos + len).into(),
-            );
+            *entry.value_mut() = (compaction_gen, new_pos..new_pos + len).into();
             new_pos += len;
         }
         compaction_writer.flush()?;
@@ -418,7 +414,6 @@ fn new_log_file(path: &Path, gen: u64) -> Result<BufWriterWithPos<File>> {
     let writer = BufWriterWithPos::new(
         OpenOptions::new()
             .create(true)
-            .write(true)
             .append(true)
             .open(path)?,
     )?;
